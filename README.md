@@ -12,3 +12,13 @@ Hydro is a manager for your local Docker Compose environment.
 - Snapshots
     - Take snapshots of your entire development environment
     - Share them with people and let them replicate your exact situation
+
+## Bridge
+
+Local app -> Hydro Outside
+Hydro Outside -> Hydro Inside
+Hydro Inside -> Database
+
+Inputs:
+
+Outputs:
