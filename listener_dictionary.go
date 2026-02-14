@@ -8,12 +8,6 @@ import (
 	"github.com/dgraph-io/ristretto/v2"
 )
 
-type ICallbackDictionary interface {
-	SubscribeCallback(key string, identifier string, callback func(neogate.Event, any))
-	RefreshCallback(key string, identifier string)
-	Identifiable
-}
-
 type Identifiable interface {
 	GetIdentifier() string
 }
@@ -28,30 +22,10 @@ type ListenerDictionary[T any, C Change[C]] struct {
 	get         func([]string) (map[string]C, error)
 	convert     func(string, C) neogate.Event
 	createMutex *sync.Mutex
-
-	// Stuff for batching
-	batching   *BatchOptions
-	batchMutex *sync.Mutex
 }
 
 func (ld *ListenerDictionary[T, C]) GetIdentifier() string {
 	return ld.Identifier
-}
-
-// Subscribe to the ListenerDictionary using a callback (prefer to subscribe using hydro.Subscribe if possible, you can also pass a callback and it'll be typesafe)
-func (ld *ListenerDictionary[T, C]) SubscribeCallback(keys []string, identifier string, callback func(neogate.Event, any)) error {
-
-	// Forward the subscribe call
-	return DictionarySubscribe(ld, keys, identifier, func(event neogate.Event, change C) {
-		callback(event, change)
-	})
-}
-
-// Refresh a callback subscription with a key with an identifier in the ListenerSubscriptions
-func (ld *ListenerDictionary[T, C]) RefreshCallback(key string, identifier string) {
-	if subs, ok := ld.subDict.Get(key); ok {
-		Refresh[T, C, func(neogate.Event, C)](subs, identifier)
-	}
 }
 
 // DictionarySubscribe to a listener in the dictionary
@@ -100,19 +74,4 @@ func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDict
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
 func (ld *ListenerDictionary[T, C]) Get(keys []string) (map[string]C, error) {
 	return ld.get(keys)
-}
-
-// Re-get the cache value for specific keys in the listener dictionary
-func (ld *ListenerDictionary[T, C]) ReGet(keys []string) error {
-	results, err := ld.Get(keys)
-	if err != nil {
-		return err
-	}
-
-	for _, key := range keys {
-		if subs, ok := ld.subDict.Get(key); ok {
-			subs.OnChange(results[key])
-		}
-	}
-	return nil
 }

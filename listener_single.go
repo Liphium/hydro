@@ -51,16 +51,3 @@ func SingleSubscribe[T any, C Change[C], S Subscription[C]](instance *Instance[T
 func (sl *SingleListener[T, C]) OnChange(change C) {
 	sl.subs.OnChange(change)
 }
-
-func (sl *SingleListener[T, C]) ReGet() error {
-	change, err := sl.get()
-	if err != nil {
-		return err
-	}
-
-	sl.mutex.RLock()
-	defer sl.mutex.RUnlock()
-
-	sl.subs.OnChange(change)
-	return nil
-}
