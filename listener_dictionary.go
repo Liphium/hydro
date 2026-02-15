@@ -22,13 +22,18 @@ type ListenerDictionary[T any, C Change[C]] struct {
 	get         func([]string) (map[string]C, error)
 	convert     func(string, C) neogate.Event
 	createMutex *sync.Mutex
+	pool        *PubSubPool[T]
 }
 
 func (ld *ListenerDictionary[T, C]) GetIdentifier() string {
 	return ld.Identifier
 }
 
-// DictionarySubscribe to a listener in the dictionary
+// Generate the channel being used for a key of this listener dictionary in Hydro pub/sub
+func (ld *ListenerDictionary[T, C]) pubSubChannel(key string) string {
+	return "ld:" + ld.Identifier + ":" + key
+}
+
 func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, C], keys []string, identifier string, subscription S) error {
 
 	// Find all listeners that are not already available
@@ -45,6 +50,15 @@ func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDict
 	if len(nonCached) == 0 {
 		return nil
 	}
+
+	// TODO: Subscribe to pub/sub properly here with the pub/sub workers
+	/*
+		// Subscribe to pub/sub for all the keys to make sure we get all the changes
+		subs, err := ld.Instance.pubSub.Subscribe(nonCached...)
+		if err != nil {
+			return err
+		}
+	*/
 
 	// Get the data for all listeners that haven't cached yet
 	results, err := ld.Get(nonCached)

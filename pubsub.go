@@ -1,11 +1,15 @@
 package hydro
 
-type IPubSubSubscription interface {
-	Receive() (string, error)
-	Close()
+import "context"
+
+type IPubSubWorker interface {
+	Publish(ctx context.Context, channel string, message string) error
+	Subscribe(ctx context.Context, channels ...string) error
+	Unsubscribe(ctx context.Context, channels ...string) error
+	OnMessage(func(channel string, message string))
+	OnError(func(channel string))
 }
 
 type IPubSubBackend interface {
-	Publish(channel string, message string) error
-	Subscribe(channel string) IPubSubSubscription
+	CreateWorker() IPubSubWorker
 }

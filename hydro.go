@@ -38,12 +38,29 @@ type HydroAdapter struct {
 type Instance[T any] struct {
 	gate        *neogate.Instance[T] // The neogate instance Hydro manages
 	gatewayPath string               // The gateway path for the Hydro gate on all servers
+	pubSub      IPubSubBackend       // The pub/sub backend currently in use
+}
+
+type Config[T any] struct {
+	// The neogate instance. All events will be sent through here.
+	Gate *neogate.Instance[T]
+
+	// Path for the external Hydro gateway (just leave empty if you don't plan on mounting it anyway)
+	GatewayPath string
+
+	// The backend for Hydro's pub/sub model (if not set we'll use a local backend that acts as a replacement for a dedicated pub/sub service)
+	PubSubBackend IPubSubBackend
 }
 
 // Create a new Hydro instance
-func New[T any](gate *neogate.Instance[T], path string) *Instance[T] {
+func New[T any](config *Config[T]) *Instance[T] {
+	if config.PubSubBackend == nil {
+		config.PubSubBackend = NewLocalPubSub()
+	}
+
 	return &Instance[T]{
-		gate:        gate,
-		gatewayPath: path,
+		gate:        config.Gate,
+		gatewayPath: config.GatewayPath,
+		pubSub:      config.PubSubBackend,
 	}
 }
