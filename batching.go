@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+type BatchOptions struct {
+	BatchDuration time.Duration
+	MaxAmount     int
+}
+
 type BatchOutput[I comparable, O any] struct {
 	Err     error
 	Outputs map[I]O

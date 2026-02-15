@@ -12,7 +12,7 @@ const SubscriptionDuration = 60 * time.Second    // The duration after which a s
 
 // A subscription can either be done using a callback or a Hydro address
 type Subscription[C Change[C]] interface {
-	func(neogate.Event, C) | HydroAddress
+	func(neogate.Event, Change[C]) | HydroAddress
 }
 
 type managedSubscription[C Change[C], S Subscription[C]] struct {
@@ -27,25 +27,27 @@ type managedSubscription[C Change[C], S Subscription[C]] struct {
 // Also aggressively caches the current return value from the listener. This is done by stacking the changes using the Stack method from the Change interface. OnSubscribe is usually pretty expensive and managing it like this makes sure we always only call it exactly once.
 type ListenerSubscriptions[T any, C Change[C]] struct {
 	instance *Instance[T]
-	convert  func(C) neogate.Event
+	convert  func(Change[C]) neogate.Event
+	mu       *sync.Mutex
 
 	subscriptions *sync.Map // List of all subscriptions
 
-	// Caching
-	cacheMutex   *sync.RWMutex // Mutex for cache access (managed by parent)
-	cachedChange C             // Last cached change (stacked)
+	// When initializing the subscriptions it may happen that some changes need to be queued due to the actual base state not being available yet, this boolean and the queue handle queuing these changes and stacking them later
+	queuing       bool
+	queuedChanges []Change[C] // Ordered with the latest change being at the end of the slice
+	cachedChange  Change[C]   // Last cached change (stacked with all previous changes to keep it consistent)
 }
 
 // Create a new manager of listener subscriptions
-func CreateSubsWith[T any, C Change[C]](instance *Instance[T], convert func(C) neogate.Event, change C) *ListenerSubscriptions[T, C] {
+func NewSubs[T any, C Change[C]](instance *Instance[T], convert func(Change[C]) neogate.Event) *ListenerSubscriptions[T, C] {
 	return &ListenerSubscriptions[T, C]{
 		instance: instance,
 		convert:  convert,
+		mu:       &sync.Mutex{},
 
+		queuing:       true, // Queuing is enabled in the beginning until Start is called
+		queuedChanges: []Change[C]{},
 		subscriptions: &sync.Map{},
-
-		cacheMutex:   &sync.RWMutex{},
-		cachedChange: change,
 	}
 }
 
@@ -72,10 +74,13 @@ func Want[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C]
 		}
 		ls.subscriptions.Store(identifier, sub)
 
-		ls.cacheMutex.RLock()
-		change := ls.cachedChange
-		ls.cacheMutex.RUnlock()
-		sendToSubscription(ls, sub, change)
+		ls.mu.Lock()
+		defer ls.mu.Unlock()
+
+		// Only send when not queuing, after queuing is disabled you get the packet anyway
+		if !ls.queuing {
+			sendToSubscription(ls, sub, ls.cachedChange)
+		}
 	}
 
 	return nil
@@ -94,12 +99,53 @@ func Refresh[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T,
 	}
 }
 
+// After DisableQueuing the subscriptions start to actually send changes when they are received, before all are queued
+func (ls *ListenerSubscriptions[T, C]) DisableQueuing(base Change[C]) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	// If we're not queuing anymore, just ignore it
+	if !ls.queuing {
+		return
+	}
+
+	// Stack all queued changes on top of the base one
+	for _, change := range ls.queuedChanges {
+		base = base.Stack(change)
+	}
+	ls.queuing = false
+	ls.onChangeNoMutex(base)
+}
+
+// Check if the subscriptions are currently still in queuing mode
+func (ls *ListenerSubscriptions[T, C]) IsQueuing() bool {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	return ls.queuing
+}
+
+// Handles a change and sends it to all subscribers of the listener
+func (ls *ListenerSubscriptions[T, C]) OnChange(change Change[C]) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	ls.onChangeNoMutex(change)
+}
+
 // Handles a change and sends it to all subscribers of the listener (THIS DOES NOT LOCK THE MUTEX)
-func (ls *ListenerSubscriptions[T, C]) OnChange(change C) {
+func (ls *ListenerSubscriptions[T, C]) onChangeNoMutex(change Change[C]) {
+
+	// If we're in queuing mode, queue the change
+	if ls.queuing {
+		ls.queuedChanges = append(ls.queuedChanges, change)
+		return
+	}
+
 	event := ls.convert(change)
 
 	// Update cache by stacking the change
-	ls.cachedChange = ls.cachedChange.Stack(change).(C)
+	ls.cachedChange = ls.cachedChange.Stack(change)
 
 	minimumValidDate := time.Now().Add(-SubscriptionDuration)
 	collectedAddresses := []HydroAddress{}
@@ -107,7 +153,7 @@ func (ls *ListenerSubscriptions[T, C]) OnChange(change C) {
 	// Go over all subscriptions and make sure they are still valid + call callback (if desired)
 	ls.subscriptions.Range(func(key, value any) bool {
 		switch sub := value.(type) {
-		case *managedSubscription[C, func(neogate.Event, C)]:
+		case *managedSubscription[C, func(neogate.Event, Change[C])]:
 
 			// Delete the subscription when it's no longer valid
 			if sub.lastWanted.Before(minimumValidDate) {
@@ -139,11 +185,11 @@ func (ls *ListenerSubscriptions[T, C]) OnChange(change C) {
 }
 
 // Send an event to a specific subscription
-func sendToSubscription[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C], sub *managedSubscription[C, S], change C) {
+func sendToSubscription[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C], sub *managedSubscription[C, S], change Change[C]) {
 	event := ls.convert(change)
 
 	switch s := any(sub).(type) {
-	case *managedSubscription[C, func(neogate.Event, C)]:
+	case *managedSubscription[C, func(neogate.Event, Change[C])]:
 		// Forward the event to the callback
 		s.sub(event, change)
 

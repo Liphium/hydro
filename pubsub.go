@@ -7,7 +7,7 @@ type IPubSubWorker interface {
 	Subscribe(ctx context.Context, channels ...string) error
 	Unsubscribe(ctx context.Context, channels ...string) error
 	OnMessage(func(channel string, message string))
-	OnError(func(channel string))
+	OnError(func(channel string, err error))
 }
 
 type IPubSubBackend interface {

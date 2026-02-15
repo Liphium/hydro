@@ -1,7 +1,9 @@
 package hydro
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/Liphium/neogate"
@@ -20,7 +22,7 @@ type ListenerDictionary[T any, C Change[C]] struct {
 	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, C]]
 
 	get         func([]string) (map[string]C, error)
-	convert     func(string, C) neogate.Event
+	convert     func(string, Change[C]) neogate.Event
 	createMutex *sync.Mutex
 	pool        *PubSubPool[T]
 }
@@ -30,8 +32,17 @@ func (ld *ListenerDictionary[T, C]) GetIdentifier() string {
 }
 
 // Generate the channel being used for a key of this listener dictionary in Hydro pub/sub
-func (ld *ListenerDictionary[T, C]) pubSubChannel(key string) string {
+func (ld *ListenerDictionary[T, C]) keyToChannel(key string) string {
 	return "ld:" + ld.Identifier + ":" + key
+}
+
+// Generate the key from a Hydro pub/sub channel
+func (ld *ListenerDictionary[T, C]) channelToKey(channel string) string {
+	values := strings.SplitN(channel, ":", 3)
+	if len(values) != 3 {
+		Log.Fatalln("Invalid channel:", channel)
+	}
+	return values[2]
 }
 
 func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, C], keys []string, identifier string, subscription S) error {
@@ -51,41 +62,66 @@ func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDict
 		return nil
 	}
 
-	// TODO: Subscribe to pub/sub properly here with the pub/sub workers
-	/*
-		// Subscribe to pub/sub for all the keys to make sure we get all the changes
-		subs, err := ld.Instance.pubSub.Subscribe(nonCached...)
-		if err != nil {
-			return err
-		}
-	*/
+	// Create subscriptions so that they can start receiving stuff already
+	return createSubscriptions(ld, keys, identifier, subscription)
+}
 
-	// Get the data for all listeners that haven't cached yet
-	results, err := ld.Get(nonCached)
-	if err != nil {
-		return fmt.Errorf("couldn't get from listener: %v", err)
-	}
+// Create subscriptions in the ListenerDictionary
+// TODO(unbreathable): How do we fix broken subscriptions in case an error is returned below subscription creation?
+func createSubscriptions[T any, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, C], keys []string, identifier string, subscription S) error {
+	ctx := context.Background()
 
-	// Create new listeners and subscribe
-	for key, change := range results {
-		subs := CreateSubsWith(ld.Instance, func(change C) neogate.Event {
+	toSubscribe := []string{}
+	for _, key := range keys {
+		subs := NewSubs(ld.Instance, func(change Change[C]) neogate.Event {
 			return ld.convert(key, change)
-		}, change)
+		})
 		if !ld.subDict.SetWithTTL(key, subs, 1, SubscriptionDuration) {
 			var ok bool
 			subs, ok = ld.subDict.Get(key)
 			if !ok {
-				return fmt.Errorf("coudln't get listener for key: %s", key)
+				return fmt.Errorf("couldn't get listener for key: %s", key)
 			}
 		}
 		Want(subs, identifier, subscription)
+
+		toSubscribe = append(toSubscribe, ld.keyToChannel(key))
 	}
 	ld.subDict.Wait()
 
+	// Subscribe to pub/sub for all the keys to make sure we get all the changes
+	if err := ld.pool.Subscribe(ctx, toSubscribe...); err != nil {
+		return fmt.Errorf("couldn't create pub/sub subscription: %v", err)
+	}
+
+	// Get the base data for all listeners that were created
+	results, err := ld.Get(toSubscribe)
+	if err != nil {
+		return fmt.Errorf("couldn't get from base data: %v", err)
+	}
+
+	// Set the results for all the keys
+	for _, key := range keys {
+		result, ok := results[key]
+		if !ok {
+			return fmt.Errorf("didn't get data for key: %v", key)
+		}
+
+		if subs, ok := ld.subDict.Get(key); ok {
+			subs.DisableQueuing(result)
+		}
+	}
 	return nil
 }
 
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
 func (ld *ListenerDictionary[T, C]) Get(keys []string) (map[string]C, error) {
 	return ld.get(keys)
+}
+
+// Handle a change for a specific key
+func (ld *ListenerDictionary[T, C]) onChange(key string, change Change[C]) {
+	if subs, ok := ld.subDict.Get(key); ok {
+		subs.OnChange(change)
+	}
 }

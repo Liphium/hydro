@@ -29,7 +29,7 @@ type PubSubPool[T any] struct {
 	workers          []*workerInfo
 	channelToWorker  map[string]IPubSubWorker // Track which worker handles which channel
 	onMessageHandler func(channel string, message string)
-	onErrorHandler   func(channel string)
+	onErrorHandler   func(channel string, err error)
 }
 
 func NewPubSubPool[T any](instance *Instance[T], config PoolConfig) *PubSubPool[T] {
@@ -144,7 +144,7 @@ func (p *PubSubPool[T]) OnMessage(handler func(channel string, message string)) 
 }
 
 // OnError sets the error handler for all workers
-func (p *PubSubPool[T]) OnError(handler func(channel string)) {
+func (p *PubSubPool[T]) OnError(handler func(channel string, err error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

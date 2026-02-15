@@ -3,22 +3,18 @@ package hydro
 import (
 	"log"
 	"sync"
-	"time"
 
 	"github.com/Liphium/neogate"
+	"github.com/bytedance/sonic"
 	"github.com/dgraph-io/ristretto/v2"
 )
 
-type BatchOptions struct {
-	BatchDuration time.Duration
-	MaxAmount     int
-}
-
 type ListenerCreate[C Change[C]] struct {
-	Identifier string                               // Identifier for the listener (REQUIRED)
-	Get        func([]string) (map[string]C, error) // Get the base data from results of listeners or just with key (required)
-	Convert    func(string, C) neogate.Event        // Should convert string and change info into an event that can be sent with Neo (required)
-	Batching   *BatchOptions
+	Identifier string                                // Identifier for the listener (REQUIRED)
+	Get        func([]string) (map[string]C, error)  // Get the base data from results of listeners or just with key (required)
+	Convert    func(string, Change[C]) neogate.Event // Should convert string and change info into an event that can be sent with Neo (required)
+
+	PoolConfig PoolConfig // Config for the pooling of subscription workers
 }
 
 // Helper function for initializing a new listener dictionary properly
@@ -32,7 +28,7 @@ func NewListenerDictionary[T any, C Change[C]](instance *Instance[T], create Lis
 		log.Panicf("Couldn't create listener dictionary: %v", err)
 	}
 
-	return &ListenerDictionary[T, C]{
+	dictionary := &ListenerDictionary[T, C]{
 		Instance:   instance,
 		Identifier: create.Identifier,
 
@@ -40,5 +36,24 @@ func NewListenerDictionary[T any, C Change[C]](instance *Instance[T], create Lis
 		get:         create.Get,
 		convert:     create.Convert,
 		createMutex: &sync.Mutex{},
+		pool:        NewPubSubPool(instance, create.PoolConfig),
 	}
+
+	// Create the pool and subscribe and stuff
+	dictionary.pool.OnMessage(func(channel, message string) {
+		var change C
+		if err := sonic.UnmarshalString(message, &change); err != nil {
+			Log.Printf("WARNING: Invalid change received in %s: %v (%v) \n", channel, message, err)
+		}
+
+		dictionary.onChange(dictionary.channelToKey(channel), change)
+	})
+
+	// Just print warning when an error happens in a channel for now
+	// TODO(unbreathable): Let's figure out a proper way to handle errors here and maybe even automatically re-subscribe or sth?
+	dictionary.pool.OnError(func(channel string, err error) {
+		Log.Printf("WARNING: Error received for channel %s: %v", channel, err)
+	})
+
+	return dictionary
 }
