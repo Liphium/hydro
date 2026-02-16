@@ -8,6 +8,7 @@ type IPubSubWorker interface {
 	Unsubscribe(ctx context.Context, channels ...string) error
 	OnMessage(func(channel string, message string))
 	OnError(func(channel string, err error))
+	Close()
 }
 
 type IPubSubBackend interface {

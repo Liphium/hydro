@@ -27,7 +27,7 @@ type PubSubPool[T any] struct {
 
 	mu               sync.RWMutex
 	workers          []*workerInfo
-	channelToWorker  map[string]IPubSubWorker // Track which worker handles which channel
+	channelToWorker  map[string]*workerInfo // Track which worker handles which channel
 	onMessageHandler func(channel string, message string)
 	onErrorHandler   func(channel string, err error)
 }
@@ -40,7 +40,7 @@ func NewPubSubPool[T any](instance *Instance[T], config PoolConfig) *PubSubPool[
 		config:          config,
 		instance:        instance,
 		workers:         make([]*workerInfo, 0),
-		channelToWorker: make(map[string]IPubSubWorker),
+		channelToWorker: make(map[string]*workerInfo),
 	}
 }
 
@@ -55,7 +55,7 @@ func (p *PubSubPool[T]) Publish(ctx context.Context, channel string, message str
 		return ErrChannelNotSubscribed
 	}
 
-	return worker.Publish(ctx, channel, message)
+	return worker.worker.Publish(ctx, channel, message)
 }
 
 // Subscribe subscribes to channels, distributing them across workers
@@ -88,7 +88,7 @@ func (p *PubSubPool[T]) Subscribe(ctx context.Context, channels ...string) error
 
 	// Track the subscriptions
 	for _, channel := range newChannels {
-		p.channelToWorker[channel] = worker.worker
+		p.channelToWorker[channel] = worker
 		worker.subscriptionCount++
 	}
 
@@ -101,7 +101,7 @@ func (p *PubSubPool[T]) Unsubscribe(ctx context.Context, channels ...string) err
 	defer p.mu.Unlock()
 
 	// Group channels by worker
-	workerChannels := make(map[IPubSubWorker][]string)
+	workerChannels := make(map[*workerInfo][]string)
 	for _, channel := range channels {
 		if worker, exists := p.channelToWorker[channel]; exists {
 			workerChannels[worker] = append(workerChannels[worker], channel)
@@ -110,21 +110,16 @@ func (p *PubSubPool[T]) Unsubscribe(ctx context.Context, channels ...string) err
 
 	// Unsubscribe from each worker
 	for worker, chans := range workerChannels {
-		if err := worker.Unsubscribe(ctx, chans...); err != nil {
+		if err := worker.worker.Unsubscribe(ctx, chans...); err != nil {
 			return err
 		}
 
 		// Update tracking
 		for _, channel := range chans {
 			delete(p.channelToWorker, channel)
-			// Decrement subscription count for this worker
-			for _, w := range p.workers {
-				if w.worker == worker {
-					w.subscriptionCount--
-					break
-				}
-			}
 		}
+
+		worker.subscriptionCount -= len(chans)
 	}
 
 	return nil
@@ -190,4 +185,16 @@ func (p *PubSubPool[T]) createWorker() (*workerInfo, error) {
 
 	p.workers = append(p.workers, info)
 	return info, nil
+}
+
+func (p *PubSubPool[T]) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, worker := range p.workers {
+		worker.worker.Close()
+		worker.subscriptionCount = 0
+	}
+	clear(p.workers)
+	clear(p.channelToWorker)
 }
