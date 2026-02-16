@@ -3,17 +3,17 @@ package hydro
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 )
 
 var (
+	ErrChannelNotRegistered     = errors.New("channel is not registered")
 	ErrChannelAlreadyRegistered = errors.New("channel already registered by different worker")
 )
 
 var _ IPubSubBackend = &LocalPubSub{}
-var _ IPubSubWorker = &LocalPubSubWorker{}
-
-// TODO: Make this thing create workers that essentially just pass their stuff through the main LocalPubSub struct so they can all talk to each other
+var _ ISubWorker = &LocalSubWorker{}
 
 type LocalPubSub struct {
 	channelMap *sync.Map
@@ -25,8 +25,20 @@ func NewLocalPubSub() *LocalPubSub {
 	}
 }
 
-func (lpb *LocalPubSub) CreateWorker() IPubSubWorker {
+func (w *LocalPubSub) Publish(ctx context.Context, channel string, message string) error {
+	ch, ok := w.channelMap.Load(channel)
+	if !ok {
+		return ErrChannelNotRegistered
+	}
+	ch.(chan localPubSubMessage) <- localPubSubMessage{
+		channel: channel,
+		message: message,
+	}
 	return nil
+}
+
+func (lpb *LocalPubSub) CreateWorker() ISubWorker {
+	return newLocalSubWorker(lpb)
 }
 
 type localPubSubMessage struct {
@@ -34,21 +46,23 @@ type localPubSubMessage struct {
 	message string
 }
 
-type LocalPubSubWorker struct {
+type LocalSubWorker struct {
 	backend        *LocalPubSub
 	messageChan    chan localPubSubMessage
 	closeChan      chan struct{}
 	mu             *sync.Mutex
+	subscriptions  []string
 	messageHandler func(channel string, message string)
 	errorHandler   func(channel string, err error)
 }
 
-func newLocalPubSubWorker(pubSub *LocalPubSub) *LocalPubSubWorker {
-	worker := &LocalPubSubWorker{
-		backend:     pubSub,
-		messageChan: make(chan localPubSubMessage),
-		closeChan:   make(chan struct{}, 1),
-		mu:          &sync.Mutex{},
+func newLocalSubWorker(pubSub *LocalPubSub) *LocalSubWorker {
+	worker := &LocalSubWorker{
+		backend:       pubSub,
+		subscriptions: []string{},
+		messageChan:   make(chan localPubSubMessage),
+		closeChan:     make(chan struct{}, 1),
+		mu:            &sync.Mutex{},
 	}
 
 	go func() {
@@ -71,44 +85,47 @@ func newLocalPubSubWorker(pubSub *LocalPubSub) *LocalPubSubWorker {
 	return worker
 }
 
-func (w *LocalPubSubWorker) Publish(ctx context.Context, channel string, message string) error {
-	w.messageChan <- localPubSubMessage{
-		channel: channel,
-		message: message,
-	}
-	return nil
-}
-
-func (w *LocalPubSubWorker) Subscribe(ctx context.Context, channels ...string) error {
+func (w *LocalSubWorker) Subscribe(ctx context.Context, channels ...string) error {
 	for _, channel := range channels {
 		if _, ok := w.backend.channelMap.LoadOrStore(channel, w.messageChan); ok {
 			return ErrChannelAlreadyRegistered
 		}
 	}
+	w.subscriptions = append(w.subscriptions, channels...)
 	return nil
 }
 
-func (w *LocalPubSubWorker) Unsubscribe(ctx context.Context, channels ...string) error {
+func (w *LocalSubWorker) Unsubscribe(ctx context.Context, channels ...string) error {
 	for _, channel := range channels {
 		w.backend.channelMap.Delete(channel)
 	}
+	w.subscriptions = slices.DeleteFunc(w.subscriptions, func(channel string) bool {
+		return slices.Contains(channels, channel)
+	})
 	return nil
 }
 
-func (w *LocalPubSubWorker) OnMessage(handler func(channel string, message string)) {
+func (w *LocalSubWorker) OnMessage(handler func(channel string, message string)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.messageHandler = handler
 }
 
-func (w *LocalPubSubWorker) OnError(handler func(channel string, err error)) {
+func (w *LocalSubWorker) OnError(handler func(channel string, err error)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.errorHandler = handler
 }
 
-func (w *LocalPubSubWorker) Close() {
+func (w *LocalSubWorker) Close() {
 	w.closeChan <- struct{}{}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, sub := range w.subscriptions {
+		w.backend.channelMap.Delete(sub)
+	}
 }

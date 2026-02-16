@@ -2,8 +2,7 @@ package hydro
 
 import "context"
 
-type IPubSubWorker interface {
-	Publish(ctx context.Context, channel string, message string) error
+type ISubWorker interface {
 	Subscribe(ctx context.Context, channels ...string) error
 	Unsubscribe(ctx context.Context, channels ...string) error
 	OnMessage(func(channel string, message string))
@@ -12,5 +11,6 @@ type IPubSubWorker interface {
 }
 
 type IPubSubBackend interface {
-	CreateWorker() IPubSubWorker
+	Publish(ctx context.Context, channel string, message string) error
+	CreateWorker() ISubWorker
 }

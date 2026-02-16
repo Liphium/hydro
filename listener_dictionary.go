@@ -24,7 +24,7 @@ type ListenerDictionary[T any, C Change[C]] struct {
 	get         func([]string) (map[string]C, error)
 	convert     func(string, Change[C]) neogate.Event
 	createMutex *sync.Mutex
-	pool        *PubSubPool[T]
+	pool        *SubPool[T]
 }
 
 func (ld *ListenerDictionary[T, C]) GetIdentifier() string {
