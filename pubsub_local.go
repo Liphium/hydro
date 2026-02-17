@@ -86,8 +86,13 @@ func newLocalSubWorker(pubSub *LocalPubSub) *LocalSubWorker {
 }
 
 func (w *LocalSubWorker) Subscribe(ctx context.Context, channels ...string) error {
-	for _, channel := range channels {
+	for i, channel := range channels {
 		if _, ok := w.backend.channelMap.LoadOrStore(channel, w.messageChan); ok {
+
+			// Delete channel subscriptions in case they still contain the current channel
+			for _, old := range channels[:i] {
+				w.backend.channelMap.CompareAndDelete(old, w.messageChan)
+			}
 			return ErrChannelAlreadyRegistered
 		}
 	}
