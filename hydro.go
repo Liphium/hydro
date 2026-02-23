@@ -1,7 +1,3 @@
-// Hydro does the following things:
-// 1. Manages the lifecycle of adapters for remote neogate clients.
-// 2. Provide an endpoint implementation for handling requests.
-// 3. Provide a way to send to the adapters using the endpoint.
 package hydro
 
 import (
@@ -35,13 +31,13 @@ type HydroAdapter struct {
 	Adapter  string          // The id of the adapter
 }
 
-type Instance[T any] struct {
+type Instance[T any, PS IPubSubBackend] struct {
 	gate        *neogate.Instance[T] // The neogate instance Hydro manages
 	gatewayPath string               // The gateway path for the Hydro gate on all servers
-	pubSub      IPubSubBackend       // The pub/sub backend currently in use
+	pubSub      PS                   // The pub/sub backend currently in use
 }
 
-type Config[T any] struct {
+type Config[T any, PS IPubSubBackend] struct {
 	// The neogate instance. All events will be sent through here.
 	Gate *neogate.Instance[T]
 
@@ -49,16 +45,12 @@ type Config[T any] struct {
 	GatewayPath string
 
 	// The backend for Hydro's pub/sub model (if not set we'll use a local backend that acts as a replacement for a dedicated pub/sub service)
-	PubSubBackend IPubSubBackend
+	PubSubBackend PS
 }
 
 // Create a new Hydro instance
-func New[T any](config *Config[T]) *Instance[T] {
-	if config.PubSubBackend == nil {
-		config.PubSubBackend = NewLocalPubSub()
-	}
-
-	return &Instance[T]{
+func New[T any, PS IPubSubBackend](config *Config[T, PS]) *Instance[T, PS] {
+	return &Instance[T, PS]{
 		gate:        config.Gate,
 		gatewayPath: config.GatewayPath,
 		pubSub:      config.PubSubBackend,

@@ -14,30 +14,30 @@ type Identifiable interface {
 	GetIdentifier() string
 }
 
-type ListenerDictionary[T any, C Change[C]] struct {
-	Instance   *Instance[T] // Hydro instance related
-	Identifier string       // Unique identifier for this listener dictionary
+type ListenerDictionary[T any, PS IPubSubBackend, C Change[C]] struct {
+	Instance   *Instance[T, PS] // Hydro instance related
+	Identifier string           // Unique identifier for this listener dictionary
 
 	// Dictionary for managing the subscriptions by key
-	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, C]]
+	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, PS, C]]
 
 	get         func([]string) (map[string]C, error)
 	convert     func(string, Change[C]) neogate.Event
 	createMutex *sync.Mutex
-	pool        *SubPool[T]
+	pool        *SubPool[PS]
 }
 
-func (ld *ListenerDictionary[T, C]) GetIdentifier() string {
+func (ld *ListenerDictionary[T, PS, C]) GetIdentifier() string {
 	return ld.Identifier
 }
 
 // Generate the channel being used for a key of this listener dictionary in Hydro pub/sub
-func (ld *ListenerDictionary[T, C]) keyToChannel(key string) string {
+func (ld *ListenerDictionary[T, PS, C]) keyToChannel(key string) string {
 	return "ld:" + ld.Identifier + ":" + key
 }
 
 // Generate the key from a Hydro pub/sub channel
-func (ld *ListenerDictionary[T, C]) channelToKey(channel string) string {
+func (ld *ListenerDictionary[T, PS, C]) channelToKey(channel string) string {
 	values := strings.SplitN(channel, ":", 3)
 	if len(values) != 3 {
 		Log.Fatalln("Invalid channel:", channel)
@@ -45,7 +45,7 @@ func (ld *ListenerDictionary[T, C]) channelToKey(channel string) string {
 	return values[2]
 }
 
-func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, C], keys []string, identifier string, subscription S) error {
+func DictionarySubscribe[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, PS, C], keys []string, identifier string, subscription S) error {
 
 	// Find all listeners that are not already available
 	nonCached := []string{}
@@ -68,7 +68,7 @@ func DictionarySubscribe[T any, C Change[C], S Subscription[C]](ld *ListenerDict
 
 // Create subscriptions in the ListenerDictionary
 // TODO(unbreathable): How do we fix broken subscriptions in case an error is returned below subscription creation?
-func createSubscriptions[T any, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, C], keys []string, identifier string, subscription S) error {
+func createSubscriptions[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, PS, C], keys []string, identifier string, subscription S) error {
 	ctx := context.Background()
 
 	toSubscribe := []string{}
@@ -115,12 +115,12 @@ func createSubscriptions[T any, C Change[C], S Subscription[C]](ld *ListenerDict
 }
 
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
-func (ld *ListenerDictionary[T, C]) Get(keys []string) (map[string]C, error) {
+func (ld *ListenerDictionary[T, PS, C]) Get(keys []string) (map[string]C, error) {
 	return ld.get(keys)
 }
 
 // Handle a change for a specific key
-func (ld *ListenerDictionary[T, C]) onChange(key string, change Change[C]) {
+func (ld *ListenerDictionary[T, PS, C]) onChange(key string, change Change[C]) {
 	if subs, ok := ld.subDict.Get(key); ok {
 		subs.OnChange(change)
 	}

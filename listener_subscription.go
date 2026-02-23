@@ -25,8 +25,8 @@ type managedSubscription[C Change[C], S Subscription[C]] struct {
 // A manager of subscriptions to a Listener that automatically evicts them statelessly when no longer wanted.
 //
 // Also aggressively caches the current return value from the listener. This is done by stacking the changes using the Stack method from the Change interface. OnSubscribe is usually pretty expensive and managing it like this makes sure we always only call it exactly once.
-type ListenerSubscriptions[T any, C Change[C]] struct {
-	instance *Instance[T]
+type ListenerSubscriptions[T any, PS IPubSubBackend, C Change[C]] struct {
+	instance *Instance[T, PS]
 	convert  func(Change[C]) neogate.Event
 	mu       *sync.Mutex
 
@@ -39,8 +39,8 @@ type ListenerSubscriptions[T any, C Change[C]] struct {
 }
 
 // Create a new manager of listener subscriptions
-func NewSubs[T any, C Change[C]](instance *Instance[T], convert func(Change[C]) neogate.Event) *ListenerSubscriptions[T, C] {
-	return &ListenerSubscriptions[T, C]{
+func NewSubs[T any, PS IPubSubBackend, C Change[C]](instance *Instance[T, PS], convert func(Change[C]) neogate.Event) *ListenerSubscriptions[T, PS, C] {
+	return &ListenerSubscriptions[T, PS, C]{
 		instance: instance,
 		convert:  convert,
 		mu:       &sync.Mutex{},
@@ -52,7 +52,7 @@ func NewSubs[T any, C Change[C]](instance *Instance[T], convert func(Change[C]) 
 }
 
 // Mark a listener subscription as wanted (identifier is a unique identifier of the subscription)
-func Want[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C], identifier string, subscription S) error {
+func Want[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], identifier string, subscription S) error {
 	if obj, ok := ls.subscriptions.Load(identifier); ok {
 
 		// Mark the current subscription as wanted
@@ -87,7 +87,7 @@ func Want[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C]
 }
 
 // Refresh a listener subscription and mark it as wanted (identifier is a unique identifier of the subscription)
-func Refresh[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C], identifier string) {
+func Refresh[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], identifier string) {
 	if obj, ok := ls.subscriptions.Load(identifier); ok {
 		sub := obj.(*managedSubscription[C, S])
 		if sub.OnWant != nil {
@@ -100,7 +100,7 @@ func Refresh[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T,
 }
 
 // After DisableQueuing the subscriptions start to actually send changes when they are received, before all are queued
-func (ls *ListenerSubscriptions[T, C]) DisableQueuing(base Change[C]) {
+func (ls *ListenerSubscriptions[T, PS, C]) DisableQueuing(base Change[C]) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -118,7 +118,7 @@ func (ls *ListenerSubscriptions[T, C]) DisableQueuing(base Change[C]) {
 }
 
 // Check if the subscriptions are currently still in queuing mode
-func (ls *ListenerSubscriptions[T, C]) IsQueuing() bool {
+func (ls *ListenerSubscriptions[T, PS, C]) IsQueuing() bool {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -126,7 +126,7 @@ func (ls *ListenerSubscriptions[T, C]) IsQueuing() bool {
 }
 
 // Handles a change and sends it to all subscribers of the listener
-func (ls *ListenerSubscriptions[T, C]) OnChange(change Change[C]) {
+func (ls *ListenerSubscriptions[T, PS, C]) OnChange(change Change[C]) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -134,7 +134,7 @@ func (ls *ListenerSubscriptions[T, C]) OnChange(change Change[C]) {
 }
 
 // Handles a change and sends it to all subscribers of the listener (THIS DOES NOT LOCK THE MUTEX)
-func (ls *ListenerSubscriptions[T, C]) onChangeNoMutex(change Change[C]) {
+func (ls *ListenerSubscriptions[T, PS, C]) onChangeNoMutex(change Change[C]) {
 
 	// If we're in queuing mode, queue the change
 	if ls.queuing {
@@ -185,7 +185,7 @@ func (ls *ListenerSubscriptions[T, C]) onChangeNoMutex(change Change[C]) {
 }
 
 // Send an event to a specific subscription
-func sendToSubscription[T any, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, C], sub *managedSubscription[C, S], change Change[C]) {
+func sendToSubscription[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], sub *managedSubscription[C, S], change Change[C]) {
 	event := ls.convert(change)
 
 	switch s := any(sub).(type) {

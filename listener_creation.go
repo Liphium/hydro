@@ -18,8 +18,8 @@ type ListenerCreate[C Change[C]] struct {
 }
 
 // Helper function for initializing a new listener dictionary properly
-func NewListenerDictionary[T any, C Change[C]](instance *Instance[T], create ListenerCreate[C]) *ListenerDictionary[T, C] {
-	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[T, C]]{
+func NewListenerDictionary[T any, PS IPubSubBackend, C Change[C]](instance *Instance[T, PS], create ListenerCreate[C]) *ListenerDictionary[T, PS, C] {
+	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[T, PS, C]]{
 		MaxCost:     10_000,      // Maximum 10.000 stored items
 		NumCounters: 10_000 * 10, // 10x what we want to store
 		BufferItems: 64,          // Read description of field
@@ -28,7 +28,7 @@ func NewListenerDictionary[T any, C Change[C]](instance *Instance[T], create Lis
 		log.Panicf("Couldn't create listener dictionary: %v", err)
 	}
 
-	dictionary := &ListenerDictionary[T, C]{
+	dictionary := &ListenerDictionary[T, PS, C]{
 		Instance:   instance,
 		Identifier: create.Identifier,
 
@@ -36,7 +36,7 @@ func NewListenerDictionary[T any, C Change[C]](instance *Instance[T], create Lis
 		get:         create.Get,
 		convert:     create.Convert,
 		createMutex: &sync.Mutex{},
-		pool:        NewPubSubPool(instance, create.PoolConfig),
+		pool:        NewPubSubPool(instance.pubSub, create.PoolConfig),
 	}
 
 	// Create the pool and subscribe and stuff

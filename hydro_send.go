@@ -3,7 +3,7 @@ package hydro
 import "github.com/Liphium/neogate"
 
 // Send an event to Hydro addresses on any server.
-func (i *Instance[T]) Send(targets []HydroAddress, event neogate.Event) {
+func (i *Instance[T, PS]) Send(targets []HydroAddress, event neogate.Event) {
 
 	// 1. Sort the targets by server
 	targetsPerServer := map[string][]HydroAdapter{}
@@ -25,6 +25,6 @@ func (i *Instance[T]) Send(targets []HydroAddress, event neogate.Event) {
 	}
 }
 
-func (i *Instance[T]) sendToRemote(server string, ids []HydroAdapter, event neogate.Event) {
+func (i *Instance[T, PS]) sendToRemote(server string, ids []HydroAdapter, event neogate.Event) {
 	// TODO: Implement
 }

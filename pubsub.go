@@ -1,6 +1,15 @@
 package hydro
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// Standardized errors for pub/sub
+var (
+	ErrChannelNotRegistered     = errors.New("channel is not registered")
+	ErrChannelAlreadyRegistered = errors.New("channel already registered by different worker")
+)
 
 type ISubWorker interface {
 	Subscribe(ctx context.Context, channels ...string) error
@@ -11,6 +20,5 @@ type ISubWorker interface {
 }
 
 type IPubSubBackend interface {
-	Publish(ctx context.Context, channel string, message string) error
 	CreateWorker() ISubWorker
 }

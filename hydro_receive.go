@@ -8,7 +8,7 @@ import (
 )
 
 // Handle receiving of a local event using Hydro. Will also let all adapters receive in Neo.
-func (i *Instance[T]) Receive(adapters []HydroAdapter, event neogate.Event) error {
+func (i *Instance[T, PS]) Receive(adapters []HydroAdapter, event neogate.Event) error {
 	// 1. Call some kind of filters to make sure the event is allowed to be received (drop all ones that don't have a specific policy or sth)
 	// TODO: Implement this :D
 

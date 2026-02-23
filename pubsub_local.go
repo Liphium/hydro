@@ -2,14 +2,8 @@ package hydro
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"sync"
-)
-
-var (
-	ErrChannelNotRegistered     = errors.New("channel is not registered")
-	ErrChannelAlreadyRegistered = errors.New("channel already registered by different worker")
 )
 
 var _ IPubSubBackend = &LocalPubSub{}
@@ -87,7 +81,7 @@ func newLocalSubWorker(pubSub *LocalPubSub) *LocalSubWorker {
 
 func (w *LocalSubWorker) Subscribe(ctx context.Context, channels ...string) error {
 	for i, channel := range channels {
-		if _, ok := w.backend.channelMap.LoadOrStore(channel, w.messageChan); ok {
+		if c, ok := w.backend.channelMap.LoadOrStore(channel, w.messageChan); ok && c != w.messageChan {
 
 			// Delete channel subscriptions in case they still contain the current channel
 			for _, old := range channels[:i] {
