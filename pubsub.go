@@ -21,4 +21,5 @@ type ISubWorker interface {
 
 type IPubSubBackend interface {
 	CreateWorker() ISubWorker
+	Publish(ctx context.Context, channel string, message string) error
 }
