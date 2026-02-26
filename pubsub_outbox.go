@@ -2,10 +2,7 @@ package hydro
 
 import (
 	"context"
-	"encoding/json"
 	"time"
-
-	"github.com/Liphium/neogate"
 )
 
 // The implementation for the outbox goes here.
@@ -28,7 +25,7 @@ type PubSubOutbox[DB any, PS IPubSubBackend] struct {
 
 type OutboxMessage struct {
 	Identifier string
-	Event      neogate.Event
+	Data       []byte
 }
 
 type OutboxCreate[DB any, PS IPubSubBackend] struct {
@@ -82,19 +79,8 @@ func NewOutbox[DB any, PS IPubSubBackend](connection DB, create OutboxCreate[DB,
 					var completed []string
 					for _, message := range messages {
 
-						// Encode the event
-						encoded, err := json.Marshal(message.Event)
-						if err != nil {
-							// On publish error, use exponential backoff
-							backoff *= 2
-							if backoff > maxBackoff {
-								backoff = maxBackoff
-							}
-							return completed, err
-						}
-
 						// Send the encoded event to pub/sub
-						err = outbox.backend.Publish(context.Background(), message.Identifier, string(encoded))
+						err := outbox.backend.Publish(context.Background(), message.Identifier, string(message.Data))
 						if err != nil {
 							// On publish error, use exponential backoff
 							backoff *= 2
@@ -115,10 +101,10 @@ func NewOutbox[DB any, PS IPubSubBackend](connection DB, create OutboxCreate[DB,
 }
 
 // Save an event to the outbox. Use this for transactional pub/sub using the database.
-func (o *PubSubOutbox[DB, PS]) Save(db DB, identifier string, event neogate.Event) error {
+func (o *PubSubOutbox[DB, PS]) Save(db DB, identifier string, data []byte) error {
 	return o.save(db, OutboxMessage{
 		Identifier: identifier,
-		Event:      event,
+		Data:       data,
 	})
 }
 

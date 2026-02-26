@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Liphium/neogate"
+	"github.com/bytedance/sonic"
 	"github.com/dgraph-io/ristretto/v2"
 )
 
@@ -130,8 +131,14 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) onChange(key string, change 
 
 // Save a change to the outbox, makes sure all of this stays transactional
 func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Save(db DB, key string, change Change[C]) error {
+	event := ld.toEvent(key, change)
+	bytes, err := sonic.Marshal(event)
+	if err != nil {
+		return err
+	}
+
 	return ld.outbox.save(db, OutboxMessage{
 		Identifier: ld.keyToChannel(key),
-		Event:      ld.toEvent(key, change),
+		Data:       bytes,
 	})
 }
