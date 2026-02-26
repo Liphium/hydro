@@ -28,8 +28,7 @@ type OutboxMessage struct {
 	Data       []byte
 }
 
-type OutboxCreate[DB any, PS IPubSubBackend] struct {
-	Backend PS
+type OutboxCreate[DB any] struct {
 
 	// How long the outbox waits before pulling from the database again (default: 100 milliseconds).
 	WaitDuration time.Duration
@@ -44,9 +43,9 @@ type OutboxCreate[DB any, PS IPubSubBackend] struct {
 }
 
 // Create a new Outbox for pub/sub. This is a data structure that can make sure all of your pub/sub stays transactional no matter which pub/sub implementation to use. This works with basically any database. All you need to do is create tables for the Outbox and also make sure you implement all the functions as required by the create.
-func NewOutbox[DB any, PS IPubSubBackend](connection DB, create OutboxCreate[DB, PS]) *PubSubOutbox[DB, PS] {
+func NewOutbox[T any, DB any, PS IPubSubBackend](instance *Instance[T, PS], connection DB, create OutboxCreate[DB]) *PubSubOutbox[DB, PS] {
 	outbox := &PubSubOutbox[DB, PS]{
-		backend:   create.Backend,
+		backend:   instance.pubSub,
 		save:      create.Save,
 		closeChan: make(chan struct{}),
 	}
