@@ -23,7 +23,8 @@ type DatabaseListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]] s
 	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, PS, C]]
 
 	get         func([]string) (map[string]C, error)
-	convert     func(string, Change[C]) neogate.Event
+	toEvent     func(string, Change[C]) neogate.Event
+	toChange    func(neogate.Event) Change[C]
 	createMutex *sync.Mutex
 	pool        *SubPool[PS]
 }
@@ -75,7 +76,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	toSubscribe := []string{}
 	for _, key := range keys {
 		subs := NewSubs(ld.Instance, func(change Change[C]) neogate.Event {
-			return ld.convert(key, change)
+			return ld.toEvent(key, change)
 		})
 		if !ld.subDict.SetWithTTL(key, subs, 1, SubscriptionDuration) {
 			var ok bool
@@ -129,5 +130,8 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) onChange(key string, change 
 
 // Save a change to the outbox, makes sure all of this stays transactional
 func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Save(db DB, key string, change Change[C]) error {
-	return ld.outbox.save(db, ld.convert(key, change))
+	return ld.outbox.save(db, OutboxMessage{
+		Identifier: ld.keyToChannel(key),
+		Event:      ld.toEvent(key, change),
+	})
 }

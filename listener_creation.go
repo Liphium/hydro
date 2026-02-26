@@ -5,14 +5,14 @@ import (
 	"sync"
 
 	"github.com/Liphium/neogate"
-	"github.com/bytedance/sonic"
 	"github.com/dgraph-io/ristretto/v2"
 )
 
 type DatabaseListenerCreate[C Change[C]] struct {
-	Identifier     string                                // Identifier for the listener (REQUIRED)
-	Get            func([]string) (map[string]C, error)  // Get the base data from results of listeners or just with key (required)
-	ConvertToEvent func(string, Change[C]) neogate.Event // Should convert string and change info into an event that can be sent with Neo (required)
+	Identifier string                                           // Identifier for the listener (REQUIRED)
+	Get        func([]string) (map[string]C, error)             // Get the base data from results of listeners or just with key (required)
+	ToEvent    func(key string, change Change[C]) neogate.Event // Should convert string and change info into an event that can be sent with Neo (required)
+	FromEvent  func(key string, encodedEvent []byte) Change[C]  // Should convert an event back to a change and its key
 
 	PoolConfig PoolConfig // Config for the pooling of subscription workers
 }
@@ -34,19 +34,16 @@ func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instan
 
 		subDict:     subDict,
 		get:         create.Get,
-		convert:     create.ConvertToEvent,
+		toEvent:     create.ToEvent,
 		createMutex: &sync.Mutex{},
 		pool:        NewPubSubPool(instance.pubSub, create.PoolConfig),
 	}
 
-	// Create the pool and subscribe and stuff
+	// Create the pool to forward messages to the dictionary
 	dictionary.pool.OnMessage(func(channel, message string) {
-		var change C
-		if err := sonic.UnmarshalString(message, &change); err != nil {
-			Log.Printf("WARNING: Invalid change received in %s: %v (%v) \n", channel, message, err)
-		}
-
-		dictionary.onChange(dictionary.channelToKey(channel), change)
+		key := dictionary.channelToKey(channel)
+		event := create.FromEvent(key, []byte(message))
+		dictionary.onChange(dictionary.channelToKey(channel), event)
 	})
 
 	// Just print warning when an error happens in a channel for now
