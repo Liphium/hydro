@@ -14,9 +14,10 @@ type Identifiable interface {
 	GetIdentifier() string
 }
 
-type ListenerDictionary[T any, PS IPubSubBackend, C Change[C]] struct {
+type DatabaseListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]] struct {
 	Instance   *Instance[T, PS] // Hydro instance related
 	Identifier string           // Unique identifier for this listener dictionary
+	outbox     *PubSubOutbox[DB, PS]
 
 	// Dictionary for managing the subscriptions by key
 	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, PS, C]]
@@ -27,17 +28,17 @@ type ListenerDictionary[T any, PS IPubSubBackend, C Change[C]] struct {
 	pool        *SubPool[PS]
 }
 
-func (ld *ListenerDictionary[T, PS, C]) GetIdentifier() string {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) GetIdentifier() string {
 	return ld.Identifier
 }
 
 // Generate the channel being used for a key of this listener dictionary in Hydro pub/sub
-func (ld *ListenerDictionary[T, PS, C]) keyToChannel(key string) string {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) keyToChannel(key string) string {
 	return "ld:" + ld.Identifier + ":" + key
 }
 
 // Generate the key from a Hydro pub/sub channel
-func (ld *ListenerDictionary[T, PS, C]) channelToKey(channel string) string {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) channelToKey(channel string) string {
 	values := strings.SplitN(channel, ":", 3)
 	if len(values) != 3 {
 		Log.Fatalln("Invalid channel:", channel)
@@ -45,7 +46,7 @@ func (ld *ListenerDictionary[T, PS, C]) channelToKey(channel string) string {
 	return values[2]
 }
 
-func DictionarySubscribe[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, PS, C], keys []string, identifier string, subscription S) error {
+func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], keys []string, identifier string, subscription S) error {
 
 	// Find all listeners that are not already available
 	nonCached := []string{}
@@ -68,7 +69,7 @@ func DictionarySubscribe[T any, PS IPubSubBackend, C Change[C], S Subscription[C
 
 // Create subscriptions in the ListenerDictionary
 // TODO(unbreathable): How do we fix broken subscriptions in case an error is returned below subscription creation?
-func createSubscriptions[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ld *ListenerDictionary[T, PS, C], keys []string, identifier string, subscription S) error {
+func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], keys []string, identifier string, subscription S) error {
 	ctx := context.Background()
 
 	toSubscribe := []string{}
@@ -115,13 +116,18 @@ func createSubscriptions[T any, PS IPubSubBackend, C Change[C], S Subscription[C
 }
 
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
-func (ld *ListenerDictionary[T, PS, C]) Get(keys []string) (map[string]C, error) {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Get(keys []string) (map[string]C, error) {
 	return ld.get(keys)
 }
 
 // Handle a change for a specific key
-func (ld *ListenerDictionary[T, PS, C]) onChange(key string, change Change[C]) {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) onChange(key string, change Change[C]) {
 	if subs, ok := ld.subDict.Get(key); ok {
 		subs.OnChange(change)
 	}
+}
+
+// Save a change to the outbox, makes sure all of this stays transactional
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Save(db DB, key string, change Change[C]) error {
+	return ld.outbox.save(db, ld.convert(key, change))
 }
