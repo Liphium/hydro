@@ -18,7 +18,7 @@ type DatabaseListenerCreate[C Change[C]] struct {
 }
 
 // Helper function for initializing a new listener dictionary properly
-func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instance *Instance[T, PS], create DatabaseListenerCreate[C]) *DatabaseListenerDictionary[T, PS, DB, C] {
+func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instance *Instance[T, PS], outbox *PubSubOutbox[DB, PS], create DatabaseListenerCreate[C]) *DatabaseListenerDictionary[T, PS, DB, C] {
 	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[T, PS, C]]{
 		MaxCost:     10_000,      // Maximum 10.000 stored items
 		NumCounters: 10_000 * 10, // 10x what we want to store
@@ -31,6 +31,7 @@ func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instan
 	dictionary := &DatabaseListenerDictionary[T, PS, DB, C]{
 		Instance:   instance,
 		Identifier: create.Identifier,
+		outbox:     outbox,
 
 		subDict:     subDict,
 		get:         create.Get,
