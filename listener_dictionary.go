@@ -23,9 +23,8 @@ type DatabaseListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]] s
 	// Dictionary for managing the subscriptions by key
 	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, PS, C]]
 
-	get         func([]string) (map[string]C, error)
+	get         func(DB, []string) (map[string]C, error)
 	toEvent     func(string, Change[C]) neogate.Event
-	toChange    func(neogate.Event) Change[C]
 	createMutex *sync.Mutex
 	pool        *SubPool[PS]
 }
@@ -48,7 +47,7 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) channelToKey(channel string)
 	return values[2]
 }
 
-func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], keys []string, identifier string, subscription S) error {
+func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], db DB, keys []string, identifier string, subscription S) error {
 
 	// Find all listeners that are not already available
 	nonCached := []string{}
@@ -66,12 +65,12 @@ func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	}
 
 	// Create subscriptions so that they can start receiving stuff already
-	return createSubscriptions(ld, keys, identifier, subscription)
+	return createSubscriptions(ld, db, keys, identifier, subscription)
 }
 
 // Create subscriptions in the ListenerDictionary
 // TODO(unbreathable): How do we fix broken subscriptions in case an error is returned below subscription creation?
-func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], keys []string, identifier string, subscription S) error {
+func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], db DB, keys []string, identifier string, subscription S) error {
 	ctx := context.Background()
 
 	toGet := []string{}
@@ -100,7 +99,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	}
 
 	// Get the base data for all listeners that were created
-	results, err := ld.Get(toGet)
+	results, err := ld.Get(db, toGet)
 	if err != nil {
 		return fmt.Errorf("couldn't get from base data: %v", err)
 	}
@@ -119,9 +118,41 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	return nil
 }
 
+// Reset all values for the keys back to the original value by re-getting them and pushing that update
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Reset(db DB, keys []string) error {
+	results, err := ld.get(db, keys)
+	if err != nil {
+		return err
+	}
+
+	// Build all of the messages for the outbox
+	messages := make([]OutboxMessage, len(keys))
+	for i, key := range keys {
+		change, ok := results[key]
+		if !ok {
+			return fmt.Errorf("couldn't find result for key %s", key)
+		}
+
+		// Marshal the event for the reset
+		event := ld.toEvent(key, change)
+		bytes, err := sonic.Marshal(event)
+		if err != nil {
+			return err
+		}
+
+		messages[i] = OutboxMessage{
+			Identifier: ld.keyToChannel(key),
+			Data:       bytes,
+		}
+	}
+
+	// Publish all the messages to the outbox
+	return ld.outbox.save(db, messages)
+}
+
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Get(keys []string) (map[string]C, error) {
-	return ld.get(keys)
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Get(db DB, keys []string) (map[string]C, error) {
+	return ld.get(db, keys)
 }
 
 // Handle a change for a specific key
@@ -131,16 +162,28 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) onChange(key string, change 
 	}
 }
 
+// Package a key and change for the outbox
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) packageForOutbox(key string, change Change[C]) (OutboxMessage, error) {
+	var message OutboxMessage
+	bytes, err := sonic.Marshal(change)
+	if err != nil {
+		return message, err
+	}
+	message = OutboxMessage{
+		Identifier: ld.keyToChannel(key),
+		Data:       bytes,
+	}
+	return message, nil
+}
+
 // Save a change to the outbox, makes sure all of this stays transactional
 func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Save(db DB, key string, change Change[C]) error {
-	event := ld.toEvent(key, change)
-	bytes, err := sonic.Marshal(event)
+	message, err := ld.packageForOutbox(key, change)
 	if err != nil {
 		return err
 	}
 
-	return ld.outbox.save(db, OutboxMessage{
-		Identifier: ld.keyToChannel(key),
-		Data:       bytes,
+	return ld.outbox.save(db, []OutboxMessage{
+		message,
 	})
 }
