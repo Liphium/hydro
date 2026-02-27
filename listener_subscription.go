@@ -145,7 +145,11 @@ func (ls *ListenerSubscriptions[T, PS, C]) onChangeNoMutex(change Change[C]) {
 	event := ls.convert(change)
 
 	// Update cache by stacking the change
-	ls.cachedChange = ls.cachedChange.Stack(change)
+	if ls.cachedChange != nil {
+		ls.cachedChange = ls.cachedChange.Stack(change)
+	} else {
+		ls.cachedChange = change
+	}
 
 	minimumValidDate := time.Now().Add(-SubscriptionDuration)
 	collectedAddresses := []HydroAddress{}

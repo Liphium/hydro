@@ -74,6 +74,7 @@ func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], keys []string, identifier string, subscription S) error {
 	ctx := context.Background()
 
+	toGet := []string{}
 	toSubscribe := []string{}
 	for _, key := range keys {
 		subs := NewSubs(ld.Instance, func(change Change[C]) neogate.Event {
@@ -88,6 +89,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 		}
 		Want(subs, identifier, subscription)
 
+		toGet = append(toGet, key)
 		toSubscribe = append(toSubscribe, ld.keyToChannel(key))
 	}
 	ld.subDict.Wait()
@@ -98,7 +100,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	}
 
 	// Get the base data for all listeners that were created
-	results, err := ld.Get(toSubscribe)
+	results, err := ld.Get(toGet)
 	if err != nil {
 		return fmt.Errorf("couldn't get from base data: %v", err)
 	}
