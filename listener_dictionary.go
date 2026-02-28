@@ -133,17 +133,12 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Reset(db DB, keys []string) 
 			return fmt.Errorf("couldn't find result for key %s", key)
 		}
 
-		// Marshal the event for the reset
-		event := ld.toEvent(key, change)
-		bytes, err := sonic.Marshal(event)
+		// Package the message for the outbox
+		message, err := ld.packageForOutbox(key, change)
 		if err != nil {
-			return err
+			return fmt.Errorf("couldn't package key %s for outbox: %v", key, err)
 		}
-
-		messages[i] = OutboxMessage{
-			Identifier: ld.keyToChannel(key),
-			Data:       bytes,
-		}
+		messages[i] = message
 	}
 
 	// Publish all the messages to the outbox
