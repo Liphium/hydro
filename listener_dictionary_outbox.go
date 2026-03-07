@@ -16,7 +16,7 @@ type dbldOutboxMessage[T any, PS IPubSubBackend, DB any, C Change[C]] struct {
 	change C
 }
 
-func (m dbldOutboxMessage[T, PS, DB, C]) convertToOutbox() (OutboxMessage, error) {
+func (m dbldOutboxMessage[T, PS, DB, C]) ConvertToOutbox() (OutboxMessage, error) {
 	return m.dict.packageForOutbox(m.key, m.change)
 }
 

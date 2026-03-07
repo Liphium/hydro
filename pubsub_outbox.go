@@ -126,14 +126,14 @@ func (o *PubSubOutbox[DB, PS]) Close() {
 }
 
 type PackedMessage interface {
-	convertToOutbox() (OutboxMessage, error)
+	ConvertToOutbox() (OutboxMessage, error)
 }
 
 // Method for inserting multiple things into the outbox with one query
 func (o *PubSubOutbox[DB, PS]) SaveMultiple(db DB, sends []PackedMessage) error {
 	messages := make([]OutboxMessage, len(sends))
 	for i, send := range sends {
-		result, err := send.convertToOutbox()
+		result, err := send.ConvertToOutbox()
 		if err != nil {
 			return err
 		}
