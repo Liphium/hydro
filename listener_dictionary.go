@@ -119,7 +119,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 }
 
 // Remove subscriptions for an identifier
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Unsubscribe(db DB, keys []string, identifier string) {
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Unsubscribe(identifier string, keys []string) {
 	for _, key := range keys {
 		if subs, ok := ld.subDict.Get(key); ok {
 			subs.Delete(identifier)
