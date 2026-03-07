@@ -118,6 +118,15 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	return nil
 }
 
+// Remove subscriptions for an identifier
+func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Unsubscribe(db DB, keys []string, identifier string) {
+	for _, key := range keys {
+		if subs, ok := ld.subDict.Get(key); ok {
+			subs.Delete(identifier)
+		}
+	}
+}
+
 // Reset all values for the keys back to the original value by re-getting them and pushing that update
 func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Reset(db DB, keys []string) error {
 	results, err := ld.get(db, keys)

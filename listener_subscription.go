@@ -99,6 +99,11 @@ func Refresh[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *Liste
 	}
 }
 
+// Delete a subscription from the subscriptions
+func (ls *ListenerSubscriptions[T, PS, C]) Delete(identifier string) {
+	ls.subscriptions.Delete(identifier)
+}
+
 // After DisableQueuing the subscriptions start to actually send changes when they are received, before all are queued
 func (ls *ListenerSubscriptions[T, PS, C]) DisableQueuing(base Change[C]) {
 	ls.mu.Lock()
