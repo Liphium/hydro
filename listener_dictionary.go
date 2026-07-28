@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Liphium/neogate"
 	"github.com/bytedance/sonic"
 	"github.com/dgraph-io/ristretto/v2"
 )
@@ -15,31 +14,29 @@ type Identifiable interface {
 	GetIdentifier() string
 }
 
-type DatabaseListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]] struct {
-	Instance   *Instance[T, PS] // Hydro instance related
-	Identifier string           // Unique identifier for this listener dictionary
-	outbox     *PubSubOutbox[DB, PS]
+type DatabaseListenerDictionary[DB any, PS IPubSubBackend[DB], C Change[C]] struct {
+	Instance   *Instance[DB, PS] // Hydro instance related
+	Identifier string            // Unique identifier for this listener dictionary
 
 	// Dictionary for managing the subscriptions by key
-	subDict *ristretto.Cache[string, *ListenerSubscriptions[T, PS, C]]
+	subDict *ristretto.Cache[string, *ListenerSubscriptions[DB, PS, C]]
 
 	get         func(DB, []string) (map[string]C, error)
-	toEvent     func(string, Change[C]) neogate.Event
-	createMutex *sync.Mutex
-	pool        *SubPool[PS]
+	createMutex sync.Mutex
+	pool        *SubPool[DB, PS]
 }
 
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) GetIdentifier() string {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) GetIdentifier() string {
 	return ld.Identifier
 }
 
 // Generate the channel being used for a key of this listener dictionary in Hydro pub/sub
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) keyToChannel(key string) string {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) keyToChannel(key string) string {
 	return "ld:" + ld.Identifier + ":" + key
 }
 
 // Generate the key from a Hydro pub/sub channel
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) channelToKey(channel string) string {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) channelToKey(channel string) string {
 	values := strings.SplitN(channel, ":", 3)
 	if len(values) != 3 {
 		Log.Fatalln("Invalid channel:", channel)
@@ -47,7 +44,7 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) channelToKey(channel string)
 	return values[2]
 }
 
-func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], db DB, keys []string, identifier string, subscription S) error {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) Subscribe(db DB, keys []string, identifier string, subscription func(change Change[C])) error {
 
 	// Find all listeners that are not already available
 	nonCached := []string{}
@@ -55,7 +52,7 @@ func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 
 		// If there already is an existing listener, just use that one
 		if subs, ok := ld.subDict.Get(key); ok {
-			Want(subs, identifier, subscription)
+			subs.Add(identifier, subscription)
 		} else {
 			nonCached = append(nonCached, key)
 		}
@@ -65,20 +62,18 @@ func DictionarySubscribe[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 	}
 
 	// Create subscriptions so that they can start receiving stuff already
-	return createSubscriptions(ld, db, keys, identifier, subscription)
+	return ld.createSubscriptions(db, keys, identifier, subscription)
 }
 
 // Create subscriptions in the ListenerDictionary
 // TODO(unbreathable): How do we fix broken subscriptions in case an error is returned below subscription creation?
-func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscription[C]](ld *DatabaseListenerDictionary[T, PS, DB, C], db DB, keys []string, identifier string, subscription S) error {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) createSubscriptions(db DB, keys []string, identifier string, subscription func(change Change[C])) error {
 	ctx := context.Background()
 
 	toGet := []string{}
 	toSubscribe := []string{}
 	for _, key := range keys {
-		subs := NewSubs(ld.Instance, func(change Change[C]) neogate.Event {
-			return ld.toEvent(key, change)
-		})
+		subs := NewSubs[DB, PS, C](ld.Instance)
 		if !ld.subDict.SetWithTTL(key, subs, 1, SubscriptionDuration) {
 			var ok bool
 			subs, ok = ld.subDict.Get(key)
@@ -86,7 +81,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 				return fmt.Errorf("couldn't get listener for key: %s", key)
 			}
 		}
-		Want(subs, identifier, subscription)
+		subs.Add(identifier, subscription)
 
 		toGet = append(toGet, key)
 		toSubscribe = append(toSubscribe, ld.keyToChannel(key))
@@ -119,7 +114,7 @@ func createSubscriptions[T any, PS IPubSubBackend, DB any, C Change[C], S Subscr
 }
 
 // Remove subscriptions for an identifier
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Unsubscribe(identifier string, keys []string) {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) Unsubscribe(identifier string, keys []string) {
 	for _, key := range keys {
 		if subs, ok := ld.subDict.Get(key); ok {
 			subs.Delete(identifier)
@@ -128,66 +123,59 @@ func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Unsubscribe(identifier strin
 }
 
 // Reset all values for the keys back to the original value by re-getting them and pushing that update
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Reset(db DB, keys []string) error {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) Reset(ctx context.Context, db DB, keys []string) error {
 	results, err := ld.get(db, keys)
 	if err != nil {
 		return err
 	}
 
 	// Build all of the messages for the outbox
-	messages := make([]OutboxMessage, len(keys))
-	for i, key := range keys {
+	for _, key := range keys {
 		change, ok := results[key]
 		if !ok {
 			return fmt.Errorf("couldn't find result for key %s", key)
 		}
 
-		// Package the message for the outbox
-		message, err := ld.packageForOutbox(key, change)
+		// Encode the thing using json
+		msg, err := ld.encode(key, change)
 		if err != nil {
-			return fmt.Errorf("couldn't package key %s for outbox: %v", key, err)
+			return fmt.Errorf("encode: %w", err)
 		}
-		messages[i] = message
+
+		// Publish to pub/sub so everyone knows about the change
+		if err := ld.Instance.pubSub.Publish(ctx, db, ld.keyToChannel(key), msg); err != nil {
+			return fmt.Errorf("pub/sub publish: %w", err)
+		}
 	}
 
-	// Publish all the messages to the outbox
-	return ld.outbox.save(db, messages)
+	return nil
 }
 
 // Get the value for keys from the listener dictionary (makes sure we can add batching in the future)
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Get(db DB, keys []string) (map[string]C, error) {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) Get(db DB, keys []string) (map[string]C, error) {
 	return ld.get(db, keys)
 }
 
 // Handle a change for a specific key
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) onChange(key string, change Change[C]) {
+func (ld *DatabaseListenerDictionary[DB, PS, C]) onChange(key string, change Change[C]) {
 	if subs, ok := ld.subDict.Get(key); ok {
 		subs.OnChange(change)
 	}
 }
 
 // Package a key and change for the outbox
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) packageForOutbox(key string, change Change[C]) (OutboxMessage, error) {
-	var message OutboxMessage
-	bytes, err := sonic.Marshal(change)
-	if err != nil {
-		return message, err
-	}
-	message = OutboxMessage{
-		Identifier: ld.keyToChannel(key),
-		Data:       bytes,
-	}
-	return message, nil
+func (ld *DatabaseListenerDictionary[DB, PS, C]) encode(key string, change Change[C]) (string, error) {
+	return sonic.MarshalString(change)
 }
 
-// Save a change to the outbox, makes sure all of this stays transactional
-func (ld *DatabaseListenerDictionary[T, PS, DB, C]) Save(db DB, key string, change Change[C]) error {
-	message, err := ld.packageForOutbox(key, change)
+// Update a key with a change, will broadcast the event to all subscribers + cache it
+func (ld *DatabaseListenerDictionary[DB, PS, C]) Update(ctx context.Context, db DB, key string, change Change[C]) error {
+
+	// Encode the thing using json
+	msg, err := ld.encode(key, change)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode: %w", err)
 	}
 
-	return ld.outbox.save(db, []OutboxMessage{
-		message,
-	})
+	return ld.Instance.pubSub.Publish(ctx, db, ld.keyToChannel(key), msg)
 }

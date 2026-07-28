@@ -2,24 +2,22 @@ package hydro
 
 import (
 	"log"
-	"sync"
 
-	"github.com/Liphium/neogate"
 	"github.com/bytedance/sonic"
 	"github.com/dgraph-io/ristretto/v2"
 )
 
 type DatabaseListenerCreate[DB any, C Change[C]] struct {
-	Identifier string                                           // Identifier for the listener (REQUIRED)
-	Get        func(DB, []string) (map[string]C, error)         // Get the base data from results of listeners or just with key (required)
-	ToEvent    func(key string, change Change[C]) neogate.Event // Should convert string and change info into an event that can be sent with Neo (required)
+	Identifier string                                   // Identifier for the listener (REQUIRED)
+	Get        func(DB, []string) (map[string]C, error) // Get the base data from results of listeners or just with key (required)
+	OnChange   func(key string, change Change[C])       // Called when the listener receives a change (required)
 
 	PoolConfig PoolConfig // Config for the pooling of subscription workers
 }
 
 // Helper function for initializing a new listener dictionary properly
-func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instance *Instance[T, PS], outbox *PubSubOutbox[DB, PS], create DatabaseListenerCreate[DB, C]) *DatabaseListenerDictionary[T, PS, DB, C] {
-	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[T, PS, C]]{
+func NewListenerDictionary[DB any, PS IPubSubBackend[DB], C Change[C]](instance *Instance[DB, PS], create DatabaseListenerCreate[DB, C]) *DatabaseListenerDictionary[DB, PS, C] {
+	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[DB, PS, C]]{
 		MaxCost:     10_000,      // Maximum 10.000 stored items
 		NumCounters: 10_000 * 10, // 10x what we want to store
 		BufferItems: 64,          // Read description of field
@@ -28,16 +26,13 @@ func NewListenerDictionary[T any, PS IPubSubBackend, DB any, C Change[C]](instan
 		log.Panicf("Couldn't create listener dictionary: %v", err)
 	}
 
-	dictionary := &DatabaseListenerDictionary[T, PS, DB, C]{
+	dictionary := &DatabaseListenerDictionary[DB, PS, C]{
 		Instance:   instance,
 		Identifier: create.Identifier,
-		outbox:     outbox,
 
-		subDict:     subDict,
-		get:         create.Get,
-		toEvent:     create.ToEvent,
-		createMutex: &sync.Mutex{},
-		pool:        NewPubSubPool(instance.pubSub, create.PoolConfig),
+		subDict: subDict,
+		get:     create.Get,
+		pool:    NewPubSubPool(instance.pubSub, create.PoolConfig),
 	}
 
 	// Create the pool to forward messages to the dictionary

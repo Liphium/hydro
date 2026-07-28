@@ -19,7 +19,7 @@ type ISubWorker interface {
 	Close()
 }
 
-type IPubSubBackend interface {
+type IPubSubBackend[DB any] interface {
 	CreateWorker() ISubWorker
-	Publish(ctx context.Context, channel string, message string) error
+	Publish(ctx context.Context, database DB, channel string, message string) error
 }

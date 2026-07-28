@@ -6,9 +6,6 @@ import (
 	"sync"
 )
 
-// Make sure the pool implements the same
-var _ ISubWorker = &SubPool[IPubSubBackend]{}
-
 type PoolConfig struct {
 	// How many subscriptions should, at maximum, be done by one worker (default: 100)
 	MaxAmountByWorker int
@@ -19,7 +16,7 @@ type workerInfo struct {
 	subscriptionCount int
 }
 
-type SubPool[PS IPubSubBackend] struct {
+type SubPool[DB any, PS IPubSubBackend[DB]] struct {
 	config  PoolConfig
 	backend PS
 
@@ -30,11 +27,11 @@ type SubPool[PS IPubSubBackend] struct {
 	onErrorHandler   func(channel string, err error)
 }
 
-func NewPubSubPool[PS IPubSubBackend](backend PS, config PoolConfig) *SubPool[PS] {
+func NewPubSubPool[DB any, PS IPubSubBackend[DB]](backend PS, config PoolConfig) *SubPool[DB, PS] {
 	if config.MaxAmountByWorker == 0 {
 		config.MaxAmountByWorker = 100
 	}
-	return &SubPool[PS]{
+	return &SubPool[DB, PS]{
 		config:          config,
 		backend:         backend,
 		workers:         make([]*workerInfo, 0),
@@ -43,7 +40,7 @@ func NewPubSubPool[PS IPubSubBackend](backend PS, config PoolConfig) *SubPool[PS
 }
 
 // Subscribe subscribes to channels, distributing them across workers
-func (p *SubPool[PS]) Subscribe(ctx context.Context, channels ...string) error {
+func (p *SubPool[DB, PS]) Subscribe(ctx context.Context, channels ...string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -80,7 +77,7 @@ func (p *SubPool[PS]) Subscribe(ctx context.Context, channels ...string) error {
 }
 
 // Unsubscribe unsubscribes from channels
-func (p *SubPool[PS]) Unsubscribe(ctx context.Context, channels ...string) error {
+func (p *SubPool[DB, PS]) Unsubscribe(ctx context.Context, channels ...string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -117,7 +114,7 @@ func (p *SubPool[PS]) Unsubscribe(ctx context.Context, channels ...string) error
 }
 
 // OnMessage sets the message handler for all workers
-func (p *SubPool[PS]) OnMessage(handler func(channel string, message string)) {
+func (p *SubPool[DB, PS]) OnMessage(handler func(channel string, message string)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -130,7 +127,7 @@ func (p *SubPool[PS]) OnMessage(handler func(channel string, message string)) {
 }
 
 // OnError sets the error handler for all workers
-func (p *SubPool[PS]) OnError(handler func(channel string, err error)) {
+func (p *SubPool[DB, PS]) OnError(handler func(channel string, err error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -144,7 +141,7 @@ func (p *SubPool[PS]) OnError(handler func(channel string, err error)) {
 
 // getOrCreateWorkerWithCapacity finds a worker with capacity or creates a new one
 // Must be called with p.mu locked
-func (p *SubPool[T]) getOrCreateWorkerWithCapacity() (*workerInfo, error) {
+func (p *SubPool[DB, T]) getOrCreateWorkerWithCapacity() (*workerInfo, error) {
 	// Find a worker with available capacity
 	for _, w := range p.workers {
 		if w.subscriptionCount < p.config.MaxAmountByWorker {
@@ -158,7 +155,7 @@ func (p *SubPool[T]) getOrCreateWorkerWithCapacity() (*workerInfo, error) {
 
 // createWorker creates a new worker and adds it to the pool
 // Must be called with p.mu locked
-func (p *SubPool[T]) createWorker() (*workerInfo, error) {
+func (p *SubPool[DB, T]) createWorker() (*workerInfo, error) {
 	worker := p.backend.CreateWorker()
 
 	// Set handlers if they've been configured
@@ -178,7 +175,7 @@ func (p *SubPool[T]) createWorker() (*workerInfo, error) {
 	return info, nil
 }
 
-func (p *SubPool[T]) Close() {
+func (p *SubPool[DB, T]) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

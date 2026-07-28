@@ -1,6 +1,7 @@
 package hydro_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Liphium/hydro"
@@ -14,5 +15,7 @@ func TestPubSubPool(t *testing.T) {
 		return hydro.NewPubSubPool(backend, hydro.PoolConfig{
 			MaxAmountByWorker: 1, // To actually test it properly
 		})
-	}, backend.Publish)
+	}, func(c context.Context, channel, message string) error {
+		return backend.Publish(c, "", channel, message)
+	})
 }

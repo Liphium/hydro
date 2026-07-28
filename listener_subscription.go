@@ -3,32 +3,19 @@ package hydro
 import (
 	"sync"
 	"time"
-
-	"github.com/Liphium/neogate"
 )
 
 const RecommendedWantInterval = 20 * time.Second // The interval how often you should call "Want" on a subscription
 const SubscriptionDuration = 60 * time.Second    // The duration after which a subscription will be deleted
 
-// A subscription can either be done using a callback or a Hydro address
-type Subscription[C Change[C]] interface {
-	func(neogate.Event, Change[C]) | HydroAddress
-}
-
-type managedSubscription[C Change[C], S Subscription[C]] struct {
-	mutex      *sync.RWMutex // Mutex for the want time
-	lastWanted time.Time     // The last time the subscription was wanted by the subscriber
-	sub        S             // The actual wrapped Subscription
-	OnWant     func()        // Function called when the subscription is wanted (will be useful for later when we add back dependencies)
-}
+type Subscription[C Change[C]] = func(c Change[C])
 
 // A manager of subscriptions to a Listener that automatically evicts them statelessly when no longer wanted.
 //
 // Also aggressively caches the current return value from the listener. This is done by stacking the changes using the Stack method from the Change interface. OnSubscribe is usually pretty expensive and managing it like this makes sure we always only call it exactly once.
-type ListenerSubscriptions[T any, PS IPubSubBackend, C Change[C]] struct {
-	instance *Instance[T, PS]
-	convert  func(Change[C]) neogate.Event
-	mu       *sync.Mutex
+type ListenerSubscriptions[DB any, PS IPubSubBackend[DB], C Change[C]] struct {
+	instance *Instance[DB, PS]
+	mu       *sync.Mutex // Mutex for the cache
 
 	subscriptions *sync.Map // List of all subscriptions
 
@@ -39,10 +26,9 @@ type ListenerSubscriptions[T any, PS IPubSubBackend, C Change[C]] struct {
 }
 
 // Create a new manager of listener subscriptions
-func NewSubs[T any, PS IPubSubBackend, C Change[C]](instance *Instance[T, PS], convert func(Change[C]) neogate.Event) *ListenerSubscriptions[T, PS, C] {
-	return &ListenerSubscriptions[T, PS, C]{
+func NewSubs[DB any, PS IPubSubBackend[DB], C Change[C]](instance *Instance[DB, PS]) *ListenerSubscriptions[DB, PS, C] {
+	return &ListenerSubscriptions[DB, PS, C]{
 		instance: instance,
-		convert:  convert,
 		mu:       &sync.Mutex{},
 
 		queuing:       true, // Queuing is enabled in the beginning until Start is called
@@ -52,51 +38,22 @@ func NewSubs[T any, PS IPubSubBackend, C Change[C]](instance *Instance[T, PS], c
 }
 
 // Mark a listener subscription as wanted (identifier is a unique identifier of the subscription)
-func Want[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], identifier string, subscription S) error {
-	if obj, ok := ls.subscriptions.Load(identifier); ok {
+func (ls *ListenerSubscriptions[DB, PS, C]) Add(identifier string, subscription func(c Change[C])) {
 
-		// Mark the current subscription as wanted
-		sub := obj.(*managedSubscription[C, S])
-		if sub.OnWant != nil {
-			sub.OnWant()
-		}
-		sub.mutex.Lock()
-		sub.lastWanted = time.Now()
-		sub.mutex.Unlock()
-	} else {
-
-		// Create a new subscription if there isn't one
-		sub := &managedSubscription[C, S]{
-			mutex:      &sync.RWMutex{},
-			lastWanted: time.Now(),
-			sub:        subscription,
-			// TODO: Add OnWant function or something so dependencies between listeners can work again
-		}
-		ls.subscriptions.Store(identifier, sub)
-
-		ls.mu.Lock()
-		defer ls.mu.Unlock()
-
-		// Only send when not queuing, after queuing is disabled you get the packet anyway
-		if !ls.queuing {
-			sendToSubscription(ls, sub, ls.cachedChange)
-		}
+	// Create a new subscription if there isn't one (if already loaded, we don't need to send anything)
+	if _, loaded := ls.subscriptions.LoadOrStore(identifier, subscription); loaded {
+		return
 	}
 
-	return nil
-}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
 
-// Refresh a listener subscription and mark it as wanted (identifier is a unique identifier of the subscription)
-func Refresh[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], identifier string) {
-	if obj, ok := ls.subscriptions.Load(identifier); ok {
-		sub := obj.(*managedSubscription[C, S])
-		if sub.OnWant != nil {
-			sub.OnWant()
-		}
-		sub.mutex.Lock()
-		sub.lastWanted = time.Now()
-		sub.mutex.Unlock()
+	// Only send when not queuing, after queuing is disabled you get the packet anyway
+	if !ls.queuing {
+		subscription(ls.cachedChange)
 	}
+
+	return
 }
 
 // Delete a subscription from the subscriptions
@@ -147,8 +104,6 @@ func (ls *ListenerSubscriptions[T, PS, C]) onChangeNoMutex(change Change[C]) {
 		return
 	}
 
-	event := ls.convert(change)
-
 	// Update cache by stacking the change
 	if ls.cachedChange != nil {
 		ls.cachedChange = ls.cachedChange.Stack(change)
@@ -156,54 +111,9 @@ func (ls *ListenerSubscriptions[T, PS, C]) onChangeNoMutex(change Change[C]) {
 		ls.cachedChange = change
 	}
 
-	minimumValidDate := time.Now().Add(-SubscriptionDuration)
-	collectedAddresses := []HydroAddress{}
-
 	// Go over all subscriptions and make sure they are still valid + call callback (if desired)
 	ls.subscriptions.Range(func(key, value any) bool {
-		switch sub := value.(type) {
-		case *managedSubscription[C, func(neogate.Event, Change[C])]:
-
-			// Delete the subscription when it's no longer valid
-			if sub.lastWanted.Before(minimumValidDate) {
-				ls.subscriptions.Delete(key)
-				return true
-			}
-
-			// Forward the event to the callback
-			sub.sub(event, change)
-
-		case *managedSubscription[C, HydroAddress]:
-
-			// Delete the subscription when it's no longer valid (duplicate ik, but we can't do better here due to Go's type system)
-			if sub.lastWanted.Before(minimumValidDate) {
-				ls.subscriptions.Delete(key)
-				return true
-			}
-
-			// Add the address to the collective Hydro send call
-			collectedAddresses = append(collectedAddresses, sub.sub)
-		}
+		value.(Subscription[C])(change)
 		return true
 	})
-
-	// Do a Hydro send to all adapters called
-	if len(collectedAddresses) > 0 {
-		ls.instance.Send(collectedAddresses, event)
-	}
-}
-
-// Send an event to a specific subscription
-func sendToSubscription[T any, PS IPubSubBackend, C Change[C], S Subscription[C]](ls *ListenerSubscriptions[T, PS, C], sub *managedSubscription[C, S], change Change[C]) {
-	event := ls.convert(change)
-
-	switch s := any(sub).(type) {
-	case *managedSubscription[C, func(neogate.Event, Change[C])]:
-		// Forward the event to the callback
-		s.sub(event, change)
-
-	case *managedSubscription[C, HydroAddress]:
-		// Send via Hydro to the specific address
-		ls.instance.Send([]HydroAddress{s.sub}, event)
-	}
 }

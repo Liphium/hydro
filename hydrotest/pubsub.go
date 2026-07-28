@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestPubSubBackend[B hydro.IPubSubBackend](t *testing.T, newBackend func() B, publish func(backend B, c context.Context, channel, message string) error) {
+func TestPubSubBackend[DB any, B hydro.IPubSubBackend[DB]](t *testing.T, newBackend func() B, publish func(backend B, c context.Context, channel, message string) error) {
 	t.Helper()
 
 	t.Run("can't publish to non-existent channel", func(t *testing.T) {

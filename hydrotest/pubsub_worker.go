@@ -94,9 +94,8 @@ func TestSubWorker(t *testing.T, newWorker func() hydro.ISubWorker, publish func
 	const channel3 = "t_channel3"
 
 	t.Run("messages are in proper order", func(t *testing.T) {
-		pubsub := hydro.NewLocalPubSub()
 		ctx := context.Background()
-		worker := pubsub.CreateWorker()
+		worker := newWorker()
 		defer worker.Close()
 
 		var mu sync.Mutex
@@ -116,7 +115,7 @@ func TestSubWorker(t *testing.T, newWorker func() hydro.ISubWorker, publish func
 		for range 100 {
 			msg := time.Now().Format("2006-01-02 15:04:05.000000000")
 			expectedMessages = append(expectedMessages, msg)
-			err := pubsub.Publish(ctx, orderChannel, msg)
+			err := publish(ctx, orderChannel, msg)
 			assert.NoError(t, err)
 		}
 

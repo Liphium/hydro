@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-var _ IPubSubBackend = &LocalPubSub{}
+var _ IPubSubBackend[any] = &LocalPubSub{}
 var _ ISubWorker = &LocalSubWorker{}
 
 type LocalPubSub struct {
@@ -19,7 +19,7 @@ func NewLocalPubSub() *LocalPubSub {
 	}
 }
 
-func (w *LocalPubSub) Publish(ctx context.Context, channel string, message string) error {
+func (w *LocalPubSub) Publish(ctx context.Context, database any, channel string, message string) error {
 	ch, ok := w.channelMap.Load(channel)
 	if !ok {
 		return ErrChannelNotRegistered
