@@ -27,6 +27,27 @@ jobs:
       - name: Formatting check
         run: test -z "$(find . -path './.cache' -prune -o -name '*.go' -exec gofmt -l {} +)"
 
+  test-pkg:
+    name: Test pkg coverage
+    runs-on: ubuntu-latest
+    needs: lint-code
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Clean caches
+        run: go clean -cache -testcache
+
+      - name: Test pkg folder with coverage (per-module)
+        run: |
+          find ./pkg -name go.mod -execdir sh -c 'pwd && go test ./... -count=1 -cover -coverprofile=coverage.out' \;
+
   test-code:
     name: Test Code
     runs-on: ubuntu-latest
