@@ -1,5 +1,5 @@
 # Hydro
-![Coverage](https://img.shields.io/badge/Coverage-36.5%25-red)
+![Coverage](https://img.shields.io/badge/Coverage-66.9%25-yellow)
 
 > [!WARNING]
 > Hydro is an experimental project and currently in its research phase. We're still developing it and releases will be unstable. Expect bugs and breaking changes, even completely without notice.
