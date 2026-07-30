@@ -2,11 +2,12 @@ package starter
 
 import (
 	"encoding/json"
-	"examples/simple/database"
+	"examples/postgresql/database"
 	"fmt"
+	"net/http"
 	"os"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"resty.dev/v3"
 )
 
@@ -69,11 +70,21 @@ func UpdatePost(post PostUpdate) error {
 func SubscribeToPost(id struct {
 	ID string
 }) error {
-	resty.NewSSESource().
+	source := resty.NewSSESource().
 		SetURL(GetPath()+"/sub/"+id.ID).
 		OnMessage(func(e any) {
 			fmt.Println(e.(*resty.SSE))
 		}, nil)
 
+	source.OnOpen(func(url string, respHdr http.Header) {
+		fmt.Println("open!!")
+	})
+	source.OnError(func(err error) {
+		fmt.Println("sub error", err)
+	})
+	source.OnRequestFailure(func(err error, res *http.Response) {
+		fmt.Println("request failure", err)
+	})
+	source.Get()
 	select {}
 }

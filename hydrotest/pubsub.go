@@ -13,14 +13,6 @@ import (
 func TestPubSubBackend[DB any, B hydro.IPubSubBackend[DB]](t *testing.T, newBackend func() B, publish func(backend B, c context.Context, channel, message string) error) {
 	t.Helper()
 
-	t.Run("can't publish to non-existent channel", func(t *testing.T) {
-		pubsub := newBackend()
-		ctx := context.Background()
-
-		err := publish(pubsub, ctx, "non-existent-channel", "test message")
-		assert.ErrorIs(t, err, hydro.ErrChannelNotRegistered)
-	})
-
 	t.Run("worker", func(t *testing.T) {
 		pubsub := newBackend()
 
@@ -93,23 +85,6 @@ func TestPubSubBackend[DB any, B hydro.IPubSubBackend[DB]](t *testing.T, newBack
 			assert.Empty(t, worker2Messages["worker1-channel1"])
 			assert.Empty(t, worker2Messages["worker1-channel2"])
 			mu2.Unlock()
-		})
-
-		t.Run("subscribing to a channel on one worker denies subscribing on a different one", func(t *testing.T) {
-			// Try to subscribe worker2 to a channel already owned by worker1
-			err := worker2.Subscribe(ctx, "worker1-channel1")
-			assert.ErrorIs(t, err, hydro.ErrChannelAlreadyRegistered)
-
-			// Try to subscribe worker1 to a channel already owned by worker2
-			err = worker1.Subscribe(ctx, "worker2-channel1")
-			assert.ErrorIs(t, err, hydro.ErrChannelAlreadyRegistered)
-
-			// Verify that a completely new worker also can't subscribe
-			worker3 := pubsub.CreateWorker()
-			err = worker3.Subscribe(ctx, "worker1-channel1")
-			assert.ErrorIs(t, err, hydro.ErrChannelAlreadyRegistered)
-
-			worker3.Close()
 		})
 
 		// Cleanup

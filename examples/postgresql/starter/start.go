@@ -3,17 +3,18 @@ package starter
 import (
 	"bufio"
 	"encoding/json"
-	"examples/simple/database"
-	"examples/simple/pubsub"
+	"examples/postgresql/database"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/Liphium/hydro"
+	"github.com/Liphium/hydro/pkg/postgresql"
 	"github.com/Liphium/magic/v3"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/log"
+	"github.com/gofiber/fiber/v3/middleware/logger"
 	"github.com/google/uuid"
-	"github.com/valyala/fasthttp"
 	"gorm.io/gorm"
 )
 
@@ -24,15 +25,17 @@ func Start() {
 
 	// Setup Hydro
 	url := "host=" + os.Getenv("DB_HOST") + " user=" + os.Getenv("DB_USER") + " password=" + os.Getenv("DB_PASSWORD") + " dbname=" + os.Getenv("DB_DATABASE") + " port=" + os.Getenv("DB_PORT") + " sslmode=disable"
-	ps := pubsub.NewPostgresPubSub(url)
-	h := hydro.New[*gorm.DB, *pubsub.PostgresPubSub](&hydro.Config[*gorm.DB, *pubsub.PostgresPubSub]{
+	ps := postgresql.NewPostgresPubSub(url)
+	h := hydro.New[*gorm.DB, *postgresql.PostgresPubSub](&hydro.Config[*gorm.DB, *postgresql.PostgresPubSub]{
 		PubSubBackend: ps,
 	})
 
 	// Setup ListenerDictionary
-	ld := hydro.NewListenerDictionary[*gorm.DB, *pubsub.PostgresPubSub, *database.Post](h, hydro.DatabaseListenerCreate[*gorm.DB, *database.Post]{
+	ld := hydro.NewListenerDictionary[*gorm.DB, *postgresql.PostgresPubSub, *database.Post](h, hydro.DatabaseListenerCreate[*gorm.DB, *database.Post]{
 		Identifier: "posts",
 		Get: func(db *gorm.DB, keys []string) (map[string]*database.Post, error) {
+			log.Info("get", keys)
+
 			results := make(map[string]*database.Post)
 			for _, key := range keys {
 				id := key
@@ -51,6 +54,7 @@ func Start() {
 
 	// Create the actual web app
 	app := fiber.New()
+	app.Use(logger.New())
 
 	// This message is just here for explanation.
 	fmt.Println()
@@ -59,9 +63,9 @@ func Start() {
 	fmt.Println("Thanks for using Magic!")
 
 	// Basic insertion endpoint to create a new post
-	app.Post("/posts", func(c *fiber.Ctx) error {
+	app.Post("/posts", func(c fiber.Ctx) error {
 		var post database.Post
-		if err := c.BodyParser(&post); err != nil {
+		if err := c.Bind().Body(&post); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON format"})
 		}
 		if post.Author == "" || post.Content == "" {
@@ -72,7 +76,7 @@ func Start() {
 			if err := tx.Create(&post).Error; err != nil {
 				return err
 			}
-			return ld.Update(c.Context(), tx, post.ID.String(), &post)
+			return ld.Update(c.RequestCtx(), tx, post.ID.String(), &post)
 		})
 
 		if err != nil {
@@ -82,12 +86,12 @@ func Start() {
 	})
 
 	// Update existing post
-	app.Post("/posts/:id", func(c *fiber.Ctx) error {
+	app.Post("/posts/:id", func(c fiber.Ctx) error {
 		id := c.Params("id")
 		var update struct {
 			Content string `json:"content"`
 		}
-		if err := c.BodyParser(&update); err != nil {
+		if err := c.Bind().Body(&update); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON"})
 		}
 
@@ -100,7 +104,7 @@ func Start() {
 			if err := tx.Save(&post).Error; err != nil {
 				return err
 			}
-			return ld.Update(c.Context(), tx, post.ID.String(), &post)
+			return ld.Update(c.RequestCtx(), tx, post.ID.String(), &post)
 		})
 
 		if err != nil {
@@ -110,7 +114,7 @@ func Start() {
 	})
 
 	// SSE Endpoint
-	app.Get("/sub/:id", func(c *fiber.Ctx) error {
+	app.Get("/sub/:id", func(c fiber.Ctx) error {
 		id := c.Params("id")
 		if _, err := uuid.Parse(id); err != nil {
 			return c.Status(400).SendString("Invalid UUID")
@@ -121,9 +125,11 @@ func Start() {
 		c.Set("Connection", "keep-alive")
 		c.Set("Transfer-Encoding", "chunked")
 
-		c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
+		done := c.RequestCtx().Done()
+
+		return c.Status(fiber.StatusOK).SendStreamWriter(func(w *bufio.Writer) {
 			msgs := make(chan string, 10)
-			
+
 			// Subscription implementation for ListenerDictionary
 			subID := uuid.New().String()
 			err := ld.Subscribe(database.DBConn, []string{id}, subID, func(change hydro.Change[*database.Post]) {
@@ -138,7 +144,7 @@ func Start() {
 
 			for {
 				select {
-				case <-c.Context().Done():
+				case <-done:
 					return
 				case msg := <-msgs:
 					fmt.Fprintf(w, "data: %s\n\n", msg)
@@ -147,13 +153,12 @@ func Start() {
 					}
 				}
 			}
-		}))
+		})
 
-		return nil
 	})
 
 	// Basic get endpoint to get all posts
-	app.Get("/posts", func(c *fiber.Ctx) error {
+	app.Get("/posts", func(c fiber.Ctx) error {
 		var posts []database.Post
 		if err := database.DBConn.Find(&posts).Error; err != nil {
 			return c.Status(500).JSON(fiber.Map{
@@ -164,7 +169,7 @@ func Start() {
 	})
 
 	// Basic get endpoint to get a single post
-	app.Get("/posts/:id", func(c *fiber.Ctx) error {
+	app.Get("/posts/:id", func(c fiber.Ctx) error {
 		id := c.Params("id")
 
 		// Validate UUID format
@@ -202,3 +207,5 @@ func Start() {
 
 	app.Listen(os.Getenv("LISTEN"))
 }
+
+// fiber:context-methods migrated

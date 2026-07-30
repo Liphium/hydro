@@ -2,7 +2,7 @@
 
 package main
 
-import "examples/simple/starter"
+import "examples/postgresql/starter"
 
 func main() {
 	starter.Start()

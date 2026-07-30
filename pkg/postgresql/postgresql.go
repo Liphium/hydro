@@ -1,19 +1,25 @@
-package pubsub
+// This package provides a Hydro pub/sub backend implementation for PostgreSQL, allowing you to add real-time capabilities to the database using its internal systems. Everything stays fully transactional.
+//
+// This implementation uses GORM and libpq. If you want to use a different library for transactions, this implementation might not be for you. However, you can look at it for reference.
+package postgresql
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Liphium/hydro"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
+// The main backend implementation for PostgreSQL pub/sub.
 type PostgresPubSub struct {
 	connStr string
 }
 
+// NewPostgresPubSub creates a new instance of PostgresPubSub with the given connection string (host=<host> port=<port> user=<user> dbname=<dbname> password=<password>).
 func NewPostgresPubSub(connStr string) *PostgresPubSub {
 	return &PostgresPubSub{connStr: connStr}
 }
@@ -23,12 +29,13 @@ func (p *PostgresPubSub) Publish(ctx context.Context, db *gorm.DB, channel strin
 	if err != nil {
 		return err
 	}
-	
+
 	query := fmt.Sprintf("NOTIFY %s, %s", pq.QuoteIdentifier(channel), pq.QuoteLiteral(message))
 	_, err = sqlDB.ExecContext(ctx, query)
 	return err
 }
 
+// PostgresWorker is the worker implementation for PostgreSQL pub/sub. It listens for notifications on the specified channels and invokes the provided callbacks when messages are received or errors occur.
 type PostgresWorker struct {
 	connStr  string
 	listener *pq.Listener
@@ -36,6 +43,7 @@ type PostgresWorker struct {
 	onErr    func(channel string, err error)
 	ctx      context.Context
 	cancel   context.CancelFunc
+	once     sync.Once
 	wg       sync.WaitGroup
 }
 
@@ -50,9 +58,11 @@ func (p *PostgresPubSub) CreateWorker() hydro.ISubWorker {
 
 func (w *PostgresWorker) Subscribe(ctx context.Context, channels ...string) error {
 	if w.listener == nil {
-		w.listener = pq.NewListener(w.connStr, 0, 0, w.handleEvent)
-		w.wg.Add(1)
-		go w.listenLoop()
+		w.once.Do(func() {
+			w.listener = pq.NewListener(w.connStr, time.Second, 10*time.Second, w.handleEvent)
+			w.wg.Add(1)
+			go w.listenLoop()
+		})
 	}
 	for _, ch := range channels {
 		if err := w.listener.Listen(ch); err != nil {

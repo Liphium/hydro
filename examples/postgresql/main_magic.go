@@ -3,7 +3,7 @@
 package main
 
 import (
-	"examples/simple/starter"
+	"examples/postgresql/starter"
 
 	"github.com/Liphium/magic/v3"
 )
