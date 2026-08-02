@@ -10,7 +10,6 @@ import (
 type DatabaseListenerCreate[DB any, C Change[C]] struct {
 	Identifier string                                   // Identifier for the listener (REQUIRED)
 	Get        func(DB, []string) (map[string]C, error) // Get the base data from results of listeners or just with key (required)
-	OnChange   func(key string, change Change[C])       // Called when the listener receives a change (required)
 
 	PoolConfig PoolConfig // Config for the pooling of subscription workers
 }
