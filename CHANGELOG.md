@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.0](https://github.com/Liphium/hydro/compare/v1.0.0...v2.0.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* Remove OnChange on dictionaries
+
+### Features
+
+* Remove OnChange on dictionaries ([d7b4246](https://github.com/Liphium/hydro/commit/d7b42463890d22886c3f58ea2f1726fc27d1f77b))
+
+
+### Bug Fixes
+
+* Unsubscribe now actually closes channel subscriptions ([2b18936](https://github.com/Liphium/hydro/commit/2b18936f4cc355873945cbf24395cc2bf48d9559))
+
 ## 1.0.0 (2026-07-30)
 
 
