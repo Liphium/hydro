@@ -1,6 +1,7 @@
 package hydro
 
 import (
+	"context"
 	"log"
 
 	"github.com/bytedance/sonic"
@@ -16,23 +17,29 @@ type DatabaseListenerCreate[DB any, C Change[C]] struct {
 
 // Helper function for initializing a new listener dictionary properly
 func NewListenerDictionary[DB any, PS IPubSubBackend[DB], C Change[C]](instance *Instance[DB, PS], create DatabaseListenerCreate[DB, C]) *DatabaseListenerDictionary[DB, PS, C] {
-	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[DB, PS, C]]{
-		MaxCost:     10_000,      // Maximum 10.000 stored items
-		NumCounters: 10_000 * 10, // 10x what we want to store
-		BufferItems: 64,          // Read description of field
-	})
-	if err != nil {
-		log.Panicf("Couldn't create listener dictionary: %v", err)
-	}
-
 	dictionary := &DatabaseListenerDictionary[DB, PS, C]{
 		Instance:   instance,
 		Identifier: create.Identifier,
 
-		subDict: subDict,
-		get:     create.Get,
-		pool:    NewPubSubPool(instance.pubSub, create.PoolConfig),
+		get:  create.Get,
+		pool: NewPubSubPool(instance.pubSub, create.PoolConfig),
 	}
+
+	subDict, err := ristretto.NewCache(&ristretto.Config[string, *ListenerSubscriptions[DB, PS, C]]{
+		MaxCost:     10_000,      // Maximum 10.000 stored items
+		NumCounters: 10_000 * 10, // 10x what we want to store
+		BufferItems: 64,          // Read description of field
+
+		OnExit: func(val *ListenerSubscriptions[DB, PS, C]) {
+			if err := dictionary.pool.Unsubscribe(context.Background(), val.channel); err != nil {
+				Log.Printf("WARNING: Couldn't unsubscribe from channel %s: %v \n", val.channel, err)
+			}
+		},
+	})
+	if err != nil {
+		log.Panicf("Couldn't create listener dictionary: %v", err)
+	}
+	dictionary.subDict = subDict
 
 	// Create the pool to forward messages to the dictionary
 	dictionary.pool.OnMessage(func(channel, message string) {

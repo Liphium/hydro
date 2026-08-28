@@ -73,7 +73,7 @@ func (ld *DatabaseListenerDictionary[DB, PS, C]) createSubscriptions(db DB, keys
 	toGet := []string{}
 	toSubscribe := []string{}
 	for _, key := range keys {
-		subs := NewSubs[DB, PS, C](ld.Instance)
+		subs := NewSubs[DB, PS, C](key, ld.Instance)
 		if !ld.subDict.SetWithTTL(key, subs, 1, SubscriptionDuration) {
 			var ok bool
 			subs, ok = ld.subDict.Get(key)

@@ -17,6 +17,7 @@ type ListenerSubscriptions[DB any, PS IPubSubBackend[DB], C Change[C]] struct {
 	instance *Instance[DB, PS]
 	mu       *sync.Mutex // Mutex for the cache
 
+	channel       string
 	subscriptions *sync.Map // List of all subscriptions
 
 	// When initializing the subscriptions it may happen that some changes need to be queued due to the actual base state not being available yet, this boolean and the queue handle queuing these changes and stacking them later
@@ -26,10 +27,11 @@ type ListenerSubscriptions[DB any, PS IPubSubBackend[DB], C Change[C]] struct {
 }
 
 // Create a new manager of listener subscriptions
-func NewSubs[DB any, PS IPubSubBackend[DB], C Change[C]](instance *Instance[DB, PS]) *ListenerSubscriptions[DB, PS, C] {
+func NewSubs[DB any, PS IPubSubBackend[DB], C Change[C]](channel string, instance *Instance[DB, PS]) *ListenerSubscriptions[DB, PS, C] {
 	return &ListenerSubscriptions[DB, PS, C]{
 		instance: instance,
 		mu:       &sync.Mutex{},
+		channel:  channel,
 
 		queuing:       true, // Queuing is enabled in the beginning until Start is called
 		queuedChanges: []Change[C]{},
@@ -52,8 +54,6 @@ func (ls *ListenerSubscriptions[DB, PS, C]) Add(identifier string, subscription 
 	if !ls.queuing {
 		subscription(ls.cachedChange)
 	}
-
-	return
 }
 
 // Delete a subscription from the subscriptions
